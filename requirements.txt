@@ -1,0 +1,10 @@
+# Install PyTorch for CPU first, or pip will pull the multi-gigabyte CUDA build:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+numpy>=1.26
+opencv-python-headless>=4.9
+ultralytics>=8.4      # detector, pitch landmarks, ByteTrack (AGPL-3.0)
+lap>=0.5.12           # assignment solver ByteTrack needs
+kokoro-onnx>=0.4      # text-to-speech (CPU)
+soundfile>=0.12
+requests>=2.31        # tools/fetch_gsr.py only
+pytest>=8
