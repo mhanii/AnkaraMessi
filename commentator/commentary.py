@@ -78,8 +78,12 @@ TEMPLATES: Dict[str, List[str]] = {
                                "An effort from {team}, deflected behind for a corner."],
     "corner_kick.setup": ["Corner for {team}, over on the {corner} side.",
                           "{team} have a corner to come from the {corner} flag."],
+    "corner_kick.crowd": ["{count} {team} players are waiting in the box.",
+                          "{team} have {count} in the area for this one."],
     "corner_kick": ["The corner is swung in!", "In it comes!"],
     "free_kick.setup": ["Free kick to {team}.", "{team} have a free kick here."],
+    "free_kick.setup.near": ["Free kick to {team}, about {range} metres from goal.",
+                             "{team} have a free kick in a dangerous spot, {range} metres out."],
     "free_kick": ["The free kick is taken.", "{team} take it."],
     "kick_off.setup": ["Both teams are set. We're ready for kick-off.",
                        "The players are in position for the kick-off."],
@@ -88,7 +92,9 @@ TEMPLATES: Dict[str, List[str]] = {
     "goal_kick": ["The goal kick is taken long.", "The keeper restarts play."],
     "hand_throw": ["The {team} keeper throws it out to start again.",
                    "Quick distribution from the {team} goalkeeper, out of his hands."],
-    "throw_in": ["Throw-in for {team}.", "{team} take the throw."],
+    "throw_in.setup": ["Throw-in to come for {team}, on the {touchline} side.",
+                       "{team} have a throw on the {touchline} touchline."],
+    "throw_in": ["{team} take the throw.", "The throw-in is taken by {team}."],
     "long_throw": ["A long throw from {team}, launched into the mix!",
                    "{team} hurl a long throw towards the box!"],
     "long_pass": ["{team} go long, {distance} metres through the air.",
@@ -148,12 +154,28 @@ def moments_from_events(events: Sequence[Event]) -> List[Moment]:
         if "corner" in e.detail:
             data["corner"] = str(e.detail["corner"]).replace("-", " ")
 
+        if "touchline" in e.detail:
+            data["touchline"] = str(e.detail["touchline"])
+        if e.type in ("throw_in", "long_throw"):
+            if not e.detail.get("taken", True) or float(e.detail.get("held_s", 0)) >= 3.0:
+                out.append(Moment(float(e.detail.get("setup_t", e.t)) + 0.6, "throw_in.setup",
+                                  PRIORITY["throw_in"] - 2, e.team, e, data))
+            if e.detail.get("taken", True):
+                out.append(Moment(e.t, e.type, PRIORITY[e.type], e.team, e, data))
+            continue
         if e.type in ("corner_kick", "free_kick", "kick_off", "goal_kick", "penalty"):
             setup_t = float(e.detail.get("setup_t", e.t))
             taken = bool(e.detail.get("taken"))
             if e.t - setup_t >= 2.5 or not taken:
-                out.append(Moment(setup_t + 0.8, f"{e.type}.setup", PRIORITY[f"{e.type}.setup"],
+                kind = f"{e.type}.setup"
+                if e.type == "free_kick" and data.get("range", 99) <= 35:
+                    kind = "free_kick.setup.near"
+                out.append(Moment(setup_t + 0.8, kind, PRIORITY[f"{e.type}.setup"],
                                   e.team, e, data))
+            crowd = int(e.detail.get("attackers_in_box", 0))
+            if e.type == "corner_kick" and crowd >= 3 and e.t - setup_t >= 5.5:
+                out.append(Moment(setup_t + 3.6, "corner_kick.crowd", 40, e.team, e,
+                                  {**data, "count": spell_small(crowd).capitalize()}))
             if taken:
                 out.append(Moment(e.t, e.type, PRIORITY[e.type], e.team, e, data))
         elif e.type == "shot":
@@ -189,7 +211,7 @@ def spell_small(n: int) -> str:
     return words[n] if 0 <= n < len(words) else str(n)
 
 
-def estimate_duration(text: str, words_per_second: float = 2.9) -> float:
+def estimate_duration(text: str, words_per_second: float = 3.2) -> float:
     return max(0.8, len(text.split()) / words_per_second + 0.2)
 
 
@@ -204,7 +226,7 @@ def direct(moments: Sequence[Moment], narrator: Narrator, clip_length: Optional[
         if not text:
             continue
         duration = estimate_duration(text)
-        pad = gap_s if m.priority >= 50 else quiet_s
+        pad = gap_s if m.priority >= 40 else quiet_s
         start = _first_free_slot(placed, m.t, duration, pad, max_delay_s)
         if start is None:
             continue
@@ -251,3 +273,88 @@ def retime(lines: List[Line], durations: Sequence[float], gap_s: float = 0.25) -
 
 def format_script(lines: Sequence[Line]) -> str:
     return "\n".join(f"[{int(ln.t // 60):02d}:{ln.t % 60:04.1f}] {ln.text}" for ln in lines)
+
+
+class LLMNarrator:
+    """Words a moment with a language model, and refuses the result if it changes the facts.
+
+    `complete` is any function that takes a prompt and returns text, so this works with a
+    local model, a free API tier, or anything else, without this package depending on it.
+    The model only chooses words. If its line mentions the wrong team, adds a number that is
+    not in the facts, runs long, or the call fails, the template line is used instead.
+    """
+
+    def __init__(self, complete, team_names: Dict[int, str], max_words: int = 16,
+                 style: str = "an excited but accurate British football commentator"):
+        self.complete = complete
+        self.team_names = team_names
+        self.max_words = max_words
+        self.style = style
+        self.fallback = TemplateNarrator(team_names)
+        self.history: List[str] = []
+
+    def facts(self, moment: Moment) -> Dict[str, object]:
+        facts: Dict[str, object] = {"moment": moment.kind.replace("_", " ").replace(".", ", ")}
+        team = self.team_names.get(moment.team) if moment.team is not None else None
+        if team:
+            facts["team"] = team
+        facts.update(moment.data)
+        if moment.event is not None and moment.event.confidence < 0.6:
+            facts["certainty"] = "not certain"
+        return facts
+
+    def prompt(self, moment: Moment) -> str:
+        facts = "; ".join(f"{k}: {v}" for k, v in self.facts(moment).items())
+        recent = " | ".join(self.history[-3:]) or "(nothing yet)"
+        return (f"You are {self.style}. Say ONE short line, at most {self.max_words} words, "
+                f"for this moment. Use only these facts and add no others, no names, no "
+                f"numbers that are not listed.\nFacts: {facts}\n"
+                f"Your last lines, do not repeat them: {recent}\nLine:")
+
+    def say(self, moment: Moment) -> Optional[str]:
+        template = self.fallback.say(moment)
+        if template is None:
+            return None  # the templates refuse moments that lack the facts to be said at all
+        try:
+            text = str(self.complete(self.prompt(moment))).strip().strip('"').split("\n")[0]
+        except Exception:
+            text = ""
+        if not self._faithful(text, moment):
+            text = template
+        self.history.append(text)
+        return text
+
+    def _faithful(self, text: str, moment: Moment) -> bool:
+        if not text or len(text.split()) > self.max_words + 4:
+            return False
+        allowed = {str(v) for v in moment.data.values()}
+        if any(tok not in allowed for tok in _digits(text)):
+            return False
+        own = self.team_names.get(moment.team) if moment.team is not None else None
+        for name in self.team_names.values():
+            if name != own and name.lower() in text.lower():
+                return False
+        return True
+
+
+def _digits(text: str) -> List[str]:
+    import re
+
+    return re.findall(r"\d+", text)
+
+
+def ollama_complete(model: str, host: str = "http://localhost:11434"):
+    """A `complete` function for a local Ollama server. Not exercised by the tests: it needs
+    Ollama running on your machine (`ollama run <model>` once to download the model)."""
+    import json
+    import urllib.request
+
+    def complete(prompt: str) -> str:
+        body = json.dumps({"model": model, "prompt": prompt, "stream": False,
+                           "options": {"temperature": 0.8, "num_predict": 40}}).encode()
+        request = urllib.request.Request(f"{host}/api/generate", data=body,
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read())["response"]
+
+    return complete

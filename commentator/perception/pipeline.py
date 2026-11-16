@@ -16,7 +16,8 @@ from typing import Callable, Dict, Iterator, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from ..core import BALL, GOALKEEPER, PLAYER, REFEREE, Detection, FrameState, PlayerState
+from ..core import (BALL, GOALKEEPER, PLAYER, REFEREE, Detection, FrameState, PlayerState,
+                    holds_ball)
 from ..pitch import (CENTRE, CORNERS, LENGTH, PENALTY_AREA_DEPTH, PENALTY_AREA_HALF_WIDTH,
                      PENALTY_SPOTS, WIDTH, goal_line_depth, inside)
 from .calibrate import Homography, PitchCalibrator
@@ -116,7 +117,7 @@ class _BallPicker:
 
 def analyze(source: Path, detector: YoloDetector, calibrator: PitchCalibrator,
             analysis_fps: float = 12.5, default_fps: float = 25.0,
-            max_seconds: Optional[float] = None, probe_every: int = 2,
+            max_seconds: Optional[float] = None, probe_every: int = 1,
             progress: Optional[Callable[[int, int], None]] = None) -> Analysis:
     src_fps, count, frames = open_source(source, default_fps)
     step = max(1, int(round(src_fps / analysis_fps)))
@@ -191,7 +192,14 @@ def analyze(source: Path, detector: YoloDetector, calibrator: PitchCalibrator,
             bx, by = rec.homography.to_pitch([((x1 + x2) / 2.0, y2)])[0]
             if np.isfinite(bx) and np.isfinite(by) and abs(bx) < 500 and abs(by) < 500:
                 ball_xy = (float(bx), float(by))
-        states.append(FrameState(k, rec.t, ball_xy, players, calibrated=True))
+        holder = None
+        if rec.ball is not None:
+            holders = [d.track_id for d in rec.detections
+                       if d.track_id is not None and roles.get(d.track_id) in (PLAYER, GOALKEEPER)
+                       and holds_ball(d.box, rec.ball.centre_px)]
+            holder = holders[0] if len(holders) == 1 else None
+        states.append(FrameState(k, rec.t, ball_xy, players, calibrated=True,
+                                 ball_holder=holder))
 
     n = max(1, len(records))
     stats = {

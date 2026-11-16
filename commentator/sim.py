@@ -24,10 +24,10 @@ class Scene:
         self._frames: List[FrameState] = []
 
     # -- building blocks ---------------------------------------------------------------
-    def _emit(self, ball: Optional[XY]) -> None:
+    def _emit(self, ball: Optional[XY], holder: Optional[int] = None) -> None:
         k = len(self._frames)
         people = [PlayerState(pid, role, team, xy) for pid, (team, role, xy) in self.players.items()]
-        self._frames.append(FrameState(k, k / self.fps, ball, people))
+        self._frames.append(FrameState(k, k / self.fps, ball, people, ball_holder=holder))
 
     def _steps(self, seconds: float) -> int:
         return max(1, int(round(seconds * self.fps)))
@@ -68,6 +68,15 @@ class Scene:
             shown = self.ball if i == n else (self.ball[0] + error[0] * bulge,
                                               self.ball[1] + error[1] * bulge)
             self._emit(shown)
+        return self
+
+    def in_hands(self, seconds: float, pid: int, lift: float = 3.0) -> "Scene":
+        """Player `pid` holds the ball in their hands. Being above the ground, it projects a
+        few metres beyond the player's feet (away from the camera, towards smaller y)."""
+        x, y = self.players[pid][2]
+        self.ball = (x, y)
+        for _ in range(self._steps(seconds)):
+            self._emit((x + 0.3, y - lift), holder=pid)
         return self
 
     def hide(self, seconds: float) -> "Scene":

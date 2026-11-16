@@ -75,7 +75,7 @@ on what survives:
 | hand throw | keeper holds the ball in the box, then a team-mate has it 10-40 m away at throw speed | **heuristic, unverified** |
 | pressure | five or more attackers in the final third for 3 s | no ground truth |
 | replay | pitch cannot be located for 3 s right after a big moment | no ground truth |
-| throw-in, long throw | **not implemented.** No labelled examples in the data we have. | to do |
+| throw-in, long throw | a player standing still on a touchline with the ball inside the upper part of their outline (in the hands), then releasing it; long = reaches a team-mate 18 m or more away | **checked by eye on one example; no labels to score against** |
 
 ## Measured results
 
@@ -138,7 +138,8 @@ own cards report narrow training data and ball AP of 0.06.
   AGPL-3.0. Fine for study; sort this out before distributing anything.
 - **Calibration model may have seen similar footage.** It was likely trained on SoccerNet
   data. Expect lower accuracy on other leagues and camera positions.
-- **Commentary wording is templates.** Correct but repetitive.
+- **Commentary wording is templates by default.** Correct but repetitive. The LLM narrator
+  is built but untried with a real model.
 
 ## Layout
 
@@ -149,15 +150,15 @@ commentator/
   config.py          every threshold, with the reason it has that value
   timeline.py        ball gap-fill, stationary windows
   possession.py      who has the ball
-  events/            setpieces.py, shots.py, passing.py, phases.py, throwins.py (stub), engine.py
+  events/            setpieces.py, shots.py, passing.py, throwins.py, phases.py, engine.py
   perception/        detector.py, calibrate.py, teams.py, pipeline.py
-  commentary.py      moments, narrator, director
+  commentary.py      moments, template and LLM narrators, director
   speech.py          TTS protocol, Kokoro backend, mixing
   render.py          annotated video
   gsr.py             SoccerNet GSR ground-truth loader
   sim.py             scripted scenes for tests (with airborne-ball errors built in)
   run.py, __main__.py
-tests/               38 tests; `python -m pytest -q`
+tests/               45 tests; `python -m pytest -q`
 tools/               fetch_models.sh, fetch_gsr.py, eval_gsr.py
 ```
 
@@ -174,9 +175,12 @@ tools/               fetch_models.sh, fetch_gsr.py, eval_gsr.py
 ## Roadmap
 
 1. **Fine-tune a ball detector** on GSR ball boxes. Biggest single gain available.
-2. **Throw-ins and long throws.** Needs examples found and checked by eye first.
+2. **Score the throw-in rule.** It fires about once per four clips on ground truth, which
+   is the right rate, but only one detection has been checked by eye. Label 20 and measure.
 3. **Streaming mode**: rolling buffer, events emitted with bounded delay, speech queued live.
-4. **LLM narrator** behind `Narrator`, fed recent events and match state. Small local model.
+4. **Try the LLM narrator on real output.** `LLMNarrator` exists and is tested with a fake
+   model: it rejects lines that name the wrong team or add a number. The Ollama adapter
+   (`--llm NAME`) has never been run against a real model.
 5. **Track the camera between calibrated frames** (optical flow) to cover close-ups.
 6. Measure on a free Colab T4; try tiny-voca as a faster voice.
 
@@ -195,5 +199,10 @@ tools/               fetch_models.sh, fetch_gsr.py, eval_gsr.py
 - **2026-11-16. Zoom where the calibration says to look.** A waiting ball is ten pixels wide.
   Knowing where the corner flags and penalty spots are in the image lets the detector
   magnify only those places.
+- **2026-11-16. Use the projection error as a signal for throw-ins.** A ball in the hands
+  projects beyond the holder's feet and sits in the upper part of their outline in the image.
+  That, on a still player on a touchline, is a throw-in. `FrameState.ball_holder` carries it.
+- **2026-11-16. Probing every second frame was tried and reverted.** It halved probe cost but
+  dropped ball sightings from 32% to 25% on the corner clip and lost the corner.
 - **2026-11-16. Time a set piece from the ball reappearing.** The detector loses a waiting
   ball seconds early. The kick is timed from the first sighting away from the spot.

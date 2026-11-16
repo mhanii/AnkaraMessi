@@ -25,6 +25,8 @@ def main(argv=None) -> int:
     run.add_argument("--teams", type=str, default=None,
                      help='two team names, comma separated (default: shirt colours)')
     run.add_argument("--voice", type=str, default="bm_george")
+    run.add_argument("--llm", type=str, default=None,
+                     help="word the lines with a local Ollama model (a name from `ollama list`)")
     run.add_argument("--max-seconds", type=float, default=None)
     run.add_argument("--no-audio", action="store_true")
     run.add_argument("--no-video", action="store_true")
@@ -40,7 +42,8 @@ def main(argv=None) -> int:
         teams = [t.strip() for t in args.teams.split(",")] if args.teams else None
         summary = run_clip(args.source, args.out, args.models, args.fps, teams,
                            audio=not args.no_audio, video=not args.no_video,
-                           max_seconds=args.max_seconds, voice=args.voice, progress=progress)
+                           max_seconds=args.max_seconds, voice=args.voice, llm=args.llm,
+                           progress=progress)
         print(json.dumps(summary, indent=1))
         print((args.out / "commentary.txt").read_text())
     return 0

@@ -73,6 +73,16 @@ class RuleConfig:
     hand_throw_max_speed_mps: float = 16.0
 
 
+    # --- Throw-ins ---
+    throw_band_m: float = 1.5  # thrower's feet this close to the touchline (or outside it)
+    throw_outside_m: float = 4.0
+    throw_min_hold_s: float = 0.5
+    throw_max_drift_m: float = 2.5  # the thrower stands still; a winger running does not
+    throw_merge_gap_s: float = 4.0  # the detector loses a held ball for seconds at a time
+    throw_min_lift_m: float = 0.8  # a held ball projects beyond the feet; one at the feet does not
+    long_throw_m: float = 18.0
+    throw_receive_s: float = 4.0
+
     # --- Phases of play (no ball needed) ---
     pressure_zone_m: float = 35.0  # the attacking third
     pressure_min_players: int = 5

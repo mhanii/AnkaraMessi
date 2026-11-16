@@ -21,6 +21,10 @@ def detect_events(tl: Timeline, cfg: RuleConfig = DEFAULT) -> List[Event]:
     set_pieces = detect_set_pieces(tl, cfg)
     set_pieces += detect_kickoffs_by_formation(tl, set_pieces, cfg)
     throw_ins = detect_throw_ins(tl, segments, cfg)
+    # A taker standing over a dead ball near the touchline is a set piece, not a throw.
+    throw_ins = [th for th in throw_ins
+                 if not any(float(sp.detail.get("setup_t", sp.t)) - 1.0 <= th.t <= sp.t + 1.0
+                            for sp in set_pieces)]
     shots = detect_shots(tl, segments, set_pieces, cfg)
 
     # No pass is reported while a set piece is waiting or a shot is in flight.

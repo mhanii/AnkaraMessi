@@ -13,7 +13,7 @@ import numpy as np
 
 from ..config import RuleConfig
 from ..core import GOALKEEPER, Event, PlayerState
-from ..pitch import (CENTRE, LENGTH, MID_Y, PENALTY_SPOTS, corner_name, corner_nearest, dist,
+from ..pitch import (CENTRE, GOAL_CENTRES, LENGTH, MID_Y, PENALTY_SPOTS, corner_name, corner_nearest, dist,
                      goal_line_depth, in_penalty_area, inside, nearest_goal_side)
 from ..timeline import Timeline, Window
 
@@ -46,6 +46,13 @@ def detect_set_pieces(tl: Timeline, cfg: RuleConfig) -> List[Event]:
                   "waited_s": round(t_event - w.t0, 1)}
         if kind == "corner_kick":
             detail["corner"] = corner_name(corner_nearest(w.xy)[0])
+            if taker is not None and taker.team is not None:
+                side = nearest_goal_side(w.xy[0])
+                detail["attackers_in_box"] = sum(
+                    1 for p in _players_at(tl, w.i1)
+                    if p.team == taker.team and in_penalty_area(p.xy[0], p.xy[1], side))
+        if kind == "free_kick":
+            detail["range_m"] = round(dist(w.xy, GOAL_CENTRES[nearest_goal_side(w.xy[0])]), 1)
         if kind in ("goal_kick", "penalty"):
             detail["side"] = nearest_goal_side(w.xy[0])
         event = Event(kind, t_event, t_event, team=taker.team if taker else None,

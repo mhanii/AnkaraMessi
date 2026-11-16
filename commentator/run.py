@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .commentary import (Line, TemplateNarrator, direct, format_script, moments_from_events,
-                         retime)
+from .commentary import (Line, LLMNarrator, TemplateNarrator, direct, format_script,
+                         moments_from_events, ollama_complete, retime)
 from .core import Event
 from .events import detect_events
 from .timeline import Timeline
@@ -40,15 +40,21 @@ def analyse_clip(source: Path, models: Path, analysis_fps: float = 12.5,
     return analysis
 
 
-def commentate(events: List[Event], team_names: Dict[int, str],
-               clip_length: float) -> List[Line]:
-    narrator = TemplateNarrator(team_names)
+def commentate(events: List[Event], team_names: Dict[int, str], clip_length: float,
+               llm: Optional[str] = None) -> List[Line]:
+    """`llm` names a local Ollama model (as listed by `ollama list`) to word the lines; without it the
+    built-in templates are used."""
+    if llm:
+        narrator = LLMNarrator(ollama_complete(llm), team_names)
+    else:
+        narrator = TemplateNarrator(team_names)
     return direct(moments_from_events(events), narrator, clip_length)
 
 
 def run(source: Path, out_dir: Path, models: Path, analysis_fps: float = 12.5,
         team_names: Optional[List[str]] = None, audio: bool = True, video: bool = True,
         max_seconds: Optional[float] = None, voice: str = "bm_george",
+        llm: Optional[str] = None,
         progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, object]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -66,7 +72,7 @@ def run(source: Path, out_dir: Path, models: Path, analysis_fps: float = 12.5,
     names = {k: v.title() for k, v in analysis.team_names.items()}
     if team_names:
         names = {k: n for k, n in enumerate(team_names[:2])}
-    lines = commentate(events, names, clip_length)
+    lines = commentate(events, names, clip_length, llm)
 
     audio_path = None
     if audio and lines:

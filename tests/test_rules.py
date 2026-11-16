@@ -204,3 +204,31 @@ def test_replay_is_a_stretch_with_no_pitch_view():
     frames.append(type(frames[0])(150, 6.0, (30.0, 30.5), frames[0].players))
     e = one(detect_events(Timeline(frames, 25.0)), "replay")
     assert abs(e.t - 2.0) < 0.1 and abs(e.end_t - 5.96) < 0.1
+
+
+def test_throw_in_short_and_long():
+    players = {**squad(0, 1, [(40.0, 0.2), (46.0, 8.0), (62.0, 16.0)]), **squad(1, 11, [(50, 30)])}
+    short = (Scene(players, ball=(40.0, 0.2)).hide(1.0).in_hands(1.5, 1)
+             .fly(0.8, (46.0, 8.5), error=(0.0, -4.0)).hold(1.0))
+    e = one(events_of(short), "throw_in")
+    assert e.team == 0 and e.player == 1 and e.receiver == 2
+    assert e.detail["touchline"] == "far" and e.distance_m < 12
+
+    long = (Scene(players, ball=(40.0, 0.2)).hide(1.0).in_hands(1.5, 1)
+            .fly(1.6, (62.0, 16.5), error=(0.0, -8.0)).hold(1.0))
+    e = one(events_of(long), "long_throw")
+    assert e.receiver == 3 and e.distance_m > 18
+    assert "pass" not in kinds(events_of(long)) and "long_pass" not in kinds(events_of(long))
+
+
+def test_a_winger_running_down_the_line_with_the_ball_is_not_a_throw_in():
+    players = {**squad(0, 1, [(40.0, 0.5)]), **squad(1, 11, [(50, 30)])}
+    scene = Scene(players, ball=(40.3, 0.6)).hold(0.3).roll(3.0, (62.0, 1.0), carrier=1)
+    assert events_of(scene) == []
+
+
+def test_a_ball_carried_while_walking_is_not_a_throw_in():
+    players = {**squad(0, 1, [(40.0, 0.2)]), **squad(1, 11, [(50, 30)])}
+    scene = Scene(players, ball=(40.0, 0.2)).in_hands(1.0, 1)
+    scene.put(1, (46.0, 0.2)).in_hands(1.0, 1)
+    assert "throw_in" not in kinds(events_of(scene))

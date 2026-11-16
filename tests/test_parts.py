@@ -170,3 +170,48 @@ def test_mix_places_each_line_at_its_time():
     assert track[int(0.5 * SAMPLE_RATE)] == 0 and track[int(1.2 * SAMPLE_RATE)] > 0
     assert track[int(2.0 * SAMPLE_RATE)] == 0 and track[int(3.2 * SAMPLE_RATE)] > 0
     assert len(track) >= 5 * SAMPLE_RATE
+
+
+def test_corner_wait_mentions_how_many_attackers_are_in_the_box():
+    corner = Event("corner_kick", 8.0, 8.0, team=0, xy=(104.5, 0.8),
+                   detail={"setup_t": 0.0, "taken": True, "corner": "far-right",
+                           "attackers_in_box": 6})
+    lines = direct(moments_from_events([corner]), TemplateNarrator({0: "White", 1: "Red"}))
+    assert [ln.kind for ln in lines] == ["corner_kick.setup", "corner_kick.crowd", "corner_kick"]
+    assert "six" in lines[1].text.lower()
+
+
+def test_free_kick_near_goal_says_how_far_out():
+    fk = Event("free_kick", 6.0, 6.0, team=1, xy=(80.0, 30.0),
+               detail={"setup_t": 0.0, "taken": True, "range_m": 25.3})
+    lines = direct(moments_from_events([fk]), TemplateNarrator({0: "White", 1: "Red"}))
+    assert "25 metres" in lines[0].text
+
+
+def test_llm_narrator_uses_the_model_line_when_it_keeps_to_the_facts():
+    from commentator.commentary import LLMNarrator
+
+    narrator = LLMNarrator(lambda prompt: '"Oh, White with a strike from 23 metres out!"',
+                           {0: "White", 1: "Red"})
+    shot = Event("shot", 5.0, 6.0, team=0, detail={"range_m": 23.0})
+    moment = moments_from_events([shot])[0]
+    assert narrator.say(moment) == "Oh, White with a strike from 23 metres out!"
+    assert "Facts:" in narrator.prompt(moment) and "range: 23" in narrator.prompt(moment)
+
+
+def test_llm_narrator_rejects_invented_facts_and_failures():
+    from commentator.commentary import LLMNarrator
+
+    shot = Event("shot", 5.0, 6.0, team=0, detail={"range_m": 23.0})
+    moment = moments_from_events([shot])[0]
+    names = {0: "White", 1: "Red"}
+    wrong_team = LLMNarrator(lambda p: "Red let fly from distance!", names).say(moment)
+    wrong_number = LLMNarrator(lambda p: "White shoot from 40 metres!", names).say(moment)
+    rambling = LLMNarrator(lambda p: " ".join(["word"] * 60), names).say(moment)
+
+    def broken(prompt):
+        raise RuntimeError("model offline")
+
+    offline = LLMNarrator(broken, names).say(moment)
+    for line in (wrong_team, wrong_number, rambling, offline):
+        assert "White" in line and "Red" not in line and "40" not in line

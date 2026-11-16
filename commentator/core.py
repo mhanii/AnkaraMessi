@@ -56,6 +56,17 @@ class FrameState:
     ball: Optional[XY]  # None when not seen or when the frame has no calibration
     players: List[PlayerState] = field(default_factory=list)
     calibrated: bool = True  # False on close-ups / replays where the pitch cannot be located
+    ball_holder: Optional[int] = None  # track id of a player with the ball in their hands
+
+
+def holds_ball(person_box: Tuple[float, float, float, float], ball_centre: XY) -> bool:
+    """True when the ball sits inside the upper part of a person's outline in the image:
+    carried in the hands or raised overhead, as opposed to lying at their feet."""
+    x1, y1, x2, y2 = person_box
+    w, h = x2 - x1, y2 - y1
+    bx, by = ball_centre
+    # Generous sideways: a ball held out at arm's length is beside the outline, not inside it.
+    return (x1 - 0.45 * w <= bx <= x2 + 0.45 * w) and (y1 - 0.25 * h <= by <= y1 + 0.65 * h)
 
 
 @dataclass
