@@ -82,8 +82,8 @@ a set piece is announced while the ball is still waiting.
 
 **From raw video, four clips.**
 
-| Clip | Labelled action | What the commentary did |
-|---|---|---|
+| What really happened | What the commentary did |
+|---|---|
 | corner at 6.3 s | announced the corner at 1.0 s, called the delivery at 6.4 s |
 | penalty at 6.6 s | announced the penalty at 1.2 s, called the kick at 6.3 s |
 | kick-off at 6.4 s | announced at 0.8 s, called at 6.4 s |
