@@ -196,7 +196,7 @@ def test_llm_narrator_uses_the_model_line_when_it_keeps_to_the_facts():
     shot = Event("shot", 5.0, 6.0, team=0, detail={"range_m": 23.0})
     moment = moments_from_events([shot])[0]
     assert narrator.say(moment) == "Oh, White with a strike from 23 metres out!"
-    assert "Facts:" in narrator.prompt(moment) and "range: 23" in narrator.prompt(moment)
+    assert "On air:" in narrator.prompt(moment) and "White" in narrator.prompt(moment)
 
 
 def test_llm_narrator_rejects_invented_facts_and_failures():
@@ -247,3 +247,15 @@ def test_booth_speaks_a_repeated_line_for_free():
     _, again = booth.say("Corner for White.", "lead", "tense")
     booth.say("Corner for White.", "analyst", "tense")   # another voice is another recording
     assert Fake.calls == 2 and again == 0.0 and booth.hits == 1
+
+
+def test_llm_narrator_rejects_a_name_that_was_not_in_the_line():
+    from commentator.commentary import LLMNarrator
+
+    names = {0: "White", 1: "Red"}
+    shot = Event("shot", 5.0, 6.0, team=0, detail={"range_m": 23.0})
+    moment = moments_from_events([shot])[0]
+    invented = LLMNarrator(lambda p: "White go close, great work by Smith!", names).say(moment)
+    parroted = LLMNarrator(lambda p: "First proper look at goal for United, that.", names).say(moment)
+    for line in (invented, parroted):
+        assert "Smith" not in line and "United" not in line and "White" in line

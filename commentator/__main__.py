@@ -1,7 +1,8 @@
 """Command line.
 
-    python -m commentator run CLIP --out out/clip        # video file or folder of frames
-    python -m commentator run CLIP --out out/clip --teams "Thun,St. Gallen" --no-audio
+    python -m commentator run CLIP --out out/clip            # a finished clip
+    python -m commentator live CLIP --out out/clip --pace real --device cuda:0   # as a live feed
+    python -m commentator bench CLIP --device cuda:0         # can this machine run it live?
 """
 
 from __future__ import annotations
@@ -17,18 +18,21 @@ def main(argv=None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="analyse a clip and produce a commentated video")
+    run = sub.add_parser("run", help="commentate a finished clip (video file or frame folder)")
     run.add_argument("source", type=Path, help="video file, or a folder of numbered frames")
     run.add_argument("--out", type=Path, required=True, help="output folder")
     run.add_argument("--models", type=Path, default=Path("models"))
     run.add_argument("--fps", type=float, default=12.5, help="frames analysed per second")
     run.add_argument("--teams", type=str, default=None,
-                     help='two team names, comma separated (default: shirt colours)')
-    run.add_argument("--voice", type=str, default="bm_george")
+                     help="two team names, comma separated (default: shirt colours)")
     run.add_argument("--llm", type=str, default=None,
-                     help="word the lines with a local Ollama model (a name from `ollama list`)")
+                     help="language model for the analyst: ollama:NAME or a local model folder")
+    run.add_argument("--density", choices=("low", "normal", "high"), default="high",
+                     help="how talkative the commentary is")
+    run.add_argument("--overlay", choices=("none", "map", "full"), default="none",
+                     help="none = clean picture; map = mini-map; full = also mark players")
+    run.add_argument("--device", type=str, default=None, help="e.g. cuda:0")
     run.add_argument("--max-seconds", type=float, default=None)
-    run.add_argument("--no-audio", action="store_true")
     run.add_argument("--no-video", action="store_true")
 
     live = sub.add_parser("live", help="commentate as if on a live feed, a few seconds behind")
@@ -82,12 +86,12 @@ def main(argv=None) -> int:
                 print(f"  frame {index}" + (f" / {total}" if total > 0 else ""), flush=True)
 
         teams = [t.strip() for t in args.teams.split(",")] if args.teams else None
-        summary = run_clip(args.source, args.out, args.models, args.fps, teams,
-                           audio=not args.no_audio, video=not args.no_video,
-                           max_seconds=args.max_seconds, voice=args.voice, llm=args.llm,
-                           progress=progress)
-        print(json.dumps(summary, indent=1))
-        print((args.out / "commentary.txt").read_text())
+        report = run_clip(args.source, args.out, args.models, args.fps, teams,
+                          video=not args.no_video, max_seconds=args.max_seconds, llm=args.llm,
+                          density=args.density, overlay=args.overlay, device=args.device,
+                          progress=progress)
+        print(json.dumps(report, indent=1))
+        print((args.out / "commentary_live.txt").read_text())
     return 0
 
 

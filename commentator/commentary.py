@@ -54,14 +54,16 @@ class Narrator(Protocol):
 
 
 PRIORITY = {
+    # 55 and above are time-critical calls: they may cut across small talk (see live.py).
     "goal": 100, "goal.cancelled": 96, "penalty": 90, "penalty.setup": 88, "save": 80,
-    "shot": 75, "corner_kick": 60, "corner_kick.setup": 58, "free_kick": 55,
-    "free_kick.setup": 50, "kick_off": 52, "kick_off.setup": 45, "colour": 44,
-    "long_throw": 42, "goal_kick": 40, "hand_throw": 38, "throw_in": 36, "long_pass": 35,
-    "box_entry": 48, "final_third": 34, "replay": 32, "carry": 31, "goal_kick.setup": 30,
-    "break": 46, "pressure": 28, "turnover": 25, "flank": 24, "pass": 22, "spell": 20,
-    "shape_deep": 19, "high_line": 19, "on_ball": 18, "midfield": 16, "numbers": 15,
-    "situation": 14, "filler": 5,
+    "shot": 75, "corner_kick": 60, "corner_kick.setup": 58, "long_throw": 57,
+    "goal_kick": 56, "free_kick": 55, "throw_in": 55, "hand_throw": 55, "kick_off": 55,
+    # Below: said when there is room.
+    "free_kick.setup": 50, "box_entry": 48, "break": 46, "kick_off.setup": 45, "colour": 44,
+    "goal_kick.setup": 43, "long_pass": 35, "final_third": 34, "replay": 32, "carry": 31,
+    "pressure": 28, "turnover": 25, "flank": 24, "pass": 22, "spell": 20, "shape_deep": 19,
+    "high_line": 19, "on_ball": 18, "midfield": 16, "numbers": 15, "situation": 14,
+    "filler": 5,
 }
 BIG_MOMENTS = ("goal", "penalty", "shot", "save")
 
@@ -486,14 +488,27 @@ class LLMNarrator:
             facts["certainty"] = "not certain"
         return facts
 
-    def prompt(self, moment: Moment) -> str:
-        facts = "; ".join(f"{k}: {v}" for k, v in self.facts(moment).items())
+    def prompt(self, moment: Moment, template: Optional[str] = None) -> str:
+        """Ask for a rewording of the line the templates would have said.
+
+        Rewording a sentence is something a small model does reliably; inventing commentary
+        from a list of facts is not (it wandered off into nonsense when tried). The template
+        line already carries exactly the facts that are true.
+        """
+        template = template or self.fallback.say(moment) or ""
         recent = " | ".join(self.history[-3:]) or "(nothing yet)"
-        return (f"You are {self.style}. Say ONE short line, at most {self.max_words} words, "
-                f"for this moment. Use only these facts and add no others: no player names, "
-                f"no score, no numbers that are not listed. Sound {tone_of(moment.kind)}.\n"
-                f"Facts: {facts}\n"
-                f"Your last lines, do not repeat them: {recent}\nLine:")
+        return (f"You are {self.style}.\n"
+                f"Say the line below in your own words, as you would live on air. Keep its "
+                f"meaning. Keep any team name exactly as written. Do not add player names, "
+                f"scores or numbers. At most {self.max_words} words. Sound "
+                f"{tone_of(moment.kind)}.\n"
+                f"Examples:\n"
+                f"Line: Corner for Rovers, over on the far right side.\n"
+                f"On air: Rovers win a corner, out on the far right.\n"
+                f"Line: That's the first real sight of goal for United.\n"
+                f"On air: First proper look at goal for United, that.\n"
+                f"Do not repeat these recent lines: {recent}\n"
+                f"Line: {template}\nOn air:")
 
     def say(self, moment: Moment) -> Optional[str]:
         template = self.fallback.say(moment)
@@ -501,7 +516,8 @@ class LLMNarrator:
         if template is None:
             return None  # the templates refuse moments that lack the facts to be said at all
         try:
-            text = str(self.complete(self.prompt(moment))).strip().strip('"').split("\n")[0]
+            text = str(self.complete(self.prompt(moment, template))).strip()
+            text = text.split("\n")[0].strip().strip('"').strip()
         except Exception:
             text = ""
         if self._faithful(text, moment):
@@ -526,6 +542,16 @@ class LLMNarrator:
         for name in self.team_names.values():
             if name != own and name.lower() in text.lower():
                 return False
+        template = self.fallback_text or ""
+        if own and own in template and own.lower() not in text.lower():
+            return False  # the team was dropped: the line no longer says who did it
+        if any(junk in text.lower() for junk in ("line:", "on air", "rewrite", "words")):
+            return False  # the model answered the instructions instead of commentating
+        # Any name the model introduces is an invention: a capitalised word (other than the
+        # one starting a sentence) must already be in the line it was asked to reword.
+        known = set(_capitalised(template)) | set(self.team_names.values())
+        if any(word not in known for word in _capitalised(text)):
+            return False
         return True
 
 
@@ -537,6 +563,17 @@ def _words(text: str) -> List[str]:
     import re
 
     return re.findall(r"[a-z-]+", text.lower())
+
+
+def _capitalised(text: str) -> List[str]:
+    """Capitalised words that are not simply starting a sentence."""
+    import re
+
+    out = []
+    for sentence in re.split(r"[.!?]+\s*", text):
+        words = re.findall(r"[A-Za-z'-]+", sentence)
+        out += [w for w in words[1:] if w[0].isupper() and w not in ("I", "I'd", "I'm", "I've")]
+    return out
 
 
 def _digits(text: str) -> List[str]:

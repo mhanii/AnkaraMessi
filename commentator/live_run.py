@@ -154,6 +154,8 @@ def run_live(source: Path, out_dir: Path, models: Path, delay_s: float = 4.0,
                       f"   <- happened {s.event_t:.1f}s, known {s.decided_t:.1f}s, {timing}"
                       + (", cut off" if s.cut_at is not None else ""))
     (out_dir / "commentary_live.txt").write_text("\n".join(script) + "\n")
+    (out_dir / "events.json").write_text(json.dumps([e.to_dict() for e in live.events],
+                                                    indent=1, default=str))
 
     frames_done = max(1, len(perception.records))
     report: Dict[str, object] = {

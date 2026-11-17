@@ -22,7 +22,8 @@ TTS_VOICES = "tts/voices-v1.0.bin"
 
 def analyse_clip(source: Path, models: Path, analysis_fps: float = 12.5,
                  max_seconds: Optional[float] = None, cache: Optional[Path] = None,
-                 progress: Optional[Callable[[int, int], None]] = None):
+                 progress: Optional[Callable[[int, int], None]] = None,
+                 device: Optional[str] = None):
     """Perception only. Cached to `cache` because it is by far the slowest step."""
     if cache is not None and Path(cache).exists():
         return pickle.loads(Path(cache).read_bytes())
@@ -32,8 +33,8 @@ def analyse_clip(source: Path, models: Path, analysis_fps: float = 12.5,
 
     analysis = analyze(
         source,
-        YoloDetector(models / DETECTOR, frame_rate=analysis_fps),
-        PitchCalibrator(models / KEYPOINTS),
+        YoloDetector(models / DETECTOR, frame_rate=analysis_fps, device=device),
+        PitchCalibrator(models / KEYPOINTS, device=device),
         analysis_fps=analysis_fps, max_seconds=max_seconds, progress=progress)
     if cache is not None:
         Path(cache).write_bytes(pickle.dumps(analysis))
@@ -52,66 +53,29 @@ def commentate(events: List[Event], team_names: Dict[int, str], clip_length: flo
 
 
 def run(source: Path, out_dir: Path, models: Path, analysis_fps: float = 12.5,
-        team_names: Optional[List[str]] = None, audio: bool = True, video: bool = True,
-        max_seconds: Optional[float] = None, voice: str = "bm_george",
-        llm: Optional[str] = None,
+        team_names: Optional[List[str]] = None, video: bool = True,
+        max_seconds: Optional[float] = None, llm: Optional[str] = None,
+        delay_s: float = 4.0, density: str = "high", overlay: str = "none",
+        device: Optional[str] = None,
         progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, object]:
+    """A finished clip in, a commentated video out.
+
+    The vision models run over the whole clip first (the slow part, cached in the output
+    folder). The commentary is then produced by the same live engine a stream would use, fed
+    the saved observations in order, so a clip and a live feed sound the same.
+    """
+    from .live_run import run_live
+
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    timings: Dict[str, float] = {}
-
-    t0 = time.time()
-    analysis = analyse_clip(source, models, analysis_fps, max_seconds,
-                            cache=out_dir / "analysis.pkl", progress=progress)
-    timings["perception_s"] = round(time.time() - t0, 1)
-
-    timeline = Timeline(analysis.frames, analysis.fps)
-    events = detect_events(timeline)
-    clip_length = float(timeline.t[-1]) if len(timeline) else 0.0
-
-    names = {k: v.title() for k, v in analysis.team_names.items()}
-    if team_names:
-        names = {k: n for k, n in enumerate(team_names[:2])}
-    lines = commentate(events, names, clip_length, llm)
-
-    audio_path = None
-    if audio and lines:
-        from .speech import SAMPLE_RATE, Booth, KokoroSynthesizer, mix, write_wav
-
-        t0 = time.time()
-        booth = Booth(KokoroSynthesizer(models / TTS_MODEL, models / TTS_VOICES, voice=voice),
-                      cache_dir=models / "tts" / "cache", voices={"lead": voice})
-        clips = [booth.say(ln.text, ln.speaker, ln.tone)[0] for ln in lines]
-        kept = retime(lines, [len(c) / SAMPLE_RATE for c in clips])
-        clips = [c for ln, c in zip(lines, clips) if any(ln is k for k in kept)]
-        lines = kept
-        audio_path = out_dir / "commentary.wav"
-        write_wav(audio_path, mix([ln.t for ln in lines], clips, clip_length))
-        timings["speech_s"] = round(time.time() - t0, 1)
-
-    (out_dir / "events.json").write_text(json.dumps([e.to_dict() for e in events], indent=1))
-    (out_dir / "commentary.txt").write_text(format_script(lines) + "\n")
-    (out_dir / "commentary.json").write_text(json.dumps(
-        [{"t": round(ln.t, 2), "duration": round(ln.duration, 2), "text": ln.text,
-          "kind": ln.kind} for ln in lines], indent=1))
-
-    video_path = None
-    if video:
-        from .render import render
-
-        t0 = time.time()
-        video_path = render(source, analysis, events, lines, out_dir / "commentated.mp4",
-                            audio_path=audio_path)
-        timings["render_s"] = round(time.time() - t0, 1)
-
-    summary = {
-        "clip_seconds": round(clip_length, 1),
-        "teams": names,
-        "events": len(events),
-        "lines": len(lines),
-        "stats": {k: round(float(v), 3) for k, v in analysis.stats.items()},
-        "timings": timings,
-        "video": str(video_path) if video_path else None,
-    }
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
-    return summary
+    cache = out_dir / "analysis.pkl"
+    started = time.time()
+    analysis = analyse_clip(source, models, analysis_fps, max_seconds, cache=cache,
+                            progress=progress, device=device)
+    report = run_live(source, out_dir, models, delay_s=delay_s, analysis_fps=analysis_fps,
+                      replay=cache, llm=llm, team_names=team_names, video=video,
+                      density=density, overlay=overlay, verbose=False)
+    report["vision"] = {"seconds": round(time.time() - started, 1),
+                        **{k: round(float(v), 3) for k, v in analysis.stats.items()}}
+    (out_dir / "summary.json").write_text(json.dumps(report, indent=1))
+    return report

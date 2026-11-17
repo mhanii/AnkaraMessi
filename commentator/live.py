@@ -326,7 +326,9 @@ class LiveDirector:
     def _fill_silence(self, now: float) -> None:
         """Nobody has spoken for a while and nothing is about to come due: say something.
         The two voices take turns. These lines claim nothing about the match."""
-        if self.fill_after_s is None or self.closing or now < self.busy_until or now < 2.0:
+        # Nothing is said before the delayed picture has started.
+        if self.fill_after_s is None or self.closing or now < self.busy_until \
+                or now < self.delay_s + 0.5:
             return
         last_end = self.aired[-1].end if self.aired else 0.0
         if now - last_end < self.fill_after_s:

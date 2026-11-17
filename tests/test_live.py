@@ -136,3 +136,8 @@ def test_silence_is_filled_when_the_booth_is_set_to_talkative():
     assert {s.speaker for s in chatty.aired} == {"lead", "analyst"}   # they take turns
     for a, b in zip(chatty.aired, chatty.aired[1:]):
         assert b.start >= a.end
+
+
+def test_nothing_is_spoken_before_the_delayed_picture_starts():
+    director = go_live(corner_scene(), delay=4.0)
+    assert all(line.start >= 4.0 for line in director.aired)

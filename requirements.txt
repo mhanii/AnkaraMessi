@@ -7,4 +7,5 @@ lap>=0.5.12           # assignment solver ByteTrack needs
 kokoro-onnx>=0.4      # text-to-speech (CPU)
 soundfile>=0.12
 requests>=2.31        # tools/fetch_gsr.py only
+# transformers>=4.50  # optional: only for --llm with a local model folder
 pytest>=8
