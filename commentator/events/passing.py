@@ -57,5 +57,6 @@ def detect_passes(segments: Sequence[Possession], blocked: Sequence[Tuple[float,
         events.append(Event(kind, a.t1, b.t0, team=a.team, player=a.track_id,
                             receiver=b.track_id, xy=a.last_xy, distance_m=d, confidence=conf,
                             detail={"speed_mps": round(speed, 1),
-                                    "from_keeper": a.role == GOALKEEPER}))
+                                    "from_keeper": a.role == GOALKEEPER,
+                                    "to_xy": b.first_xy}))
     return events

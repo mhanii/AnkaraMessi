@@ -162,6 +162,10 @@ class EventTracker:
                 out.append(Moment(e.end_t, "spell", PRIORITY["spell"], e.team, e))
             if e.type == "long_pass":
                 out.append(Moment(e.t, "long_pass", PRIORITY["long_pass"], e.team, e, data))
+            else:
+                direction = e.detail.get("direction")
+                kind = f"pass.{direction}" if direction else "pass"
+                out.append(Moment(e.end_t, kind, PRIORITY["pass"], e.team, e, data))
             return out
         if e.type == "turnover":
             self.pass_run = []
@@ -169,6 +173,9 @@ class EventTracker:
             big = any(b.type in ("goal", "penalty", "shot", "save") and 0.0 <= e.t - b.t <= 12.0
                       for b in events)
             return [Moment(e.t + 0.6, "replay", PRIORITY["replay"], None, e, data)] if big else []
+        if e.type == "situation":
+            return [Moment(e.t, f"situation.{e.detail.get('zone', 'middle')}",
+                           PRIORITY["situation"], e.team, e, data)]
         if e.type in PRIORITY:
             return [Moment(e.t, e.type, PRIORITY[e.type], e.team, e, data)]
         return []
@@ -182,7 +189,7 @@ class EventTracker:
 class Analyst:
     """The co-commentator: reacts to what the lead has just called, using running facts."""
 
-    def __init__(self, min_gap_s: float = 7.0):
+    def __init__(self, min_gap_s: float = 3.5):
         self.min_gap_s = min_gap_s
         self.shots: Counter = Counter()
         self.corners: Counter = Counter()
@@ -230,6 +237,18 @@ class Analyst:
             self.pressure[team] += 1
             if self.pressure[team] >= 2:
                 topic = "colour.pressure"
+        elif base == "break":
+            topic = "colour.break"
+        elif kind == "box_entry":
+            topic = "colour.box"
+        elif kind == "shape_deep":
+            topic = "colour.deep"
+        elif kind == "high_line":
+            topic = "colour.high_line"
+        elif kind == "long_pass":
+            topic = "colour.long_pass"
+        elif kind in ("corner_kick.setup", "free_kick.setup", "throw_in.setup"):
+            topic = "colour.wait"
 
         if topic is None:
             return None
@@ -241,9 +260,12 @@ class Analyst:
                       speaker="analyst")
 
 
+DENSITY = {"low": (2.0, None), "normal": (1.2, 5.0), "high": (0.25, 0.9)}
+
+
 def _ttl(priority: int) -> float:
     """How long after its moment a line is still worth saying."""
-    return 6.0 if priority >= 75 else 3.5 if priority >= 40 else 2.0
+    return 6.0 if priority >= 75 else 3.5 if priority >= 40 else 3.0
 
 
 @dataclass
@@ -262,12 +284,17 @@ class LiveDirector:
 
     def __init__(self, lead: Narrator, booth: Booth, analyst_voice: Optional[Narrator] = None,
                  analyst: Optional[Analyst] = None, delay_s: float = 4.0, gap_s: float = 0.3,
-                 quiet_s: float = 1.5):
+                 density: str = "normal"):
         self.lead = lead
         self.analyst_voice = analyst_voice or lead
         self.analyst = analyst
         self.booth = booth
-        self.delay_s, self.gap_s, self.quiet_s = delay_s, gap_s, quiet_s
+        self.delay_s, self.gap_s = delay_s, gap_s
+        # How talkative the booth is: the silence required before a minor remark, and how
+        # long a silence may last before somebody fills it (None = never fill).
+        self.quiet_s, self.fill_after_s = DENSITY[density]
+        self._fill_turn = 0
+        self.closing = False  # set when the feed has ended: finish what is queued, add nothing
         self.pending: List[_Pending] = []
         self.aired: List[Spoken] = []
         self.dropped: List[tuple] = []
@@ -291,7 +318,30 @@ class LiveDirector:
         audio, cost = self.booth.say(text, moment.speaker, tone)
         due = now if moment.data.get("immediate") else moment.t + self.delay_s
         self.seconds_wording += thinking
-        self.pending.append(_Pending(moment, text, audio, due, now + thinking + cost, now, tone))
+        cost = thinking + cost
+        if cost < 0.02:  # bookkeeping, not real waiting
+            cost = 0.0
+        self.pending.append(_Pending(moment, text, audio, due, now + cost, now, tone))
+
+    def _fill_silence(self, now: float) -> None:
+        """Nobody has spoken for a while and nothing is about to come due: say something.
+        The two voices take turns. These lines claim nothing about the match."""
+        if self.fill_after_s is None or self.closing or now < self.busy_until or now < 2.0:
+            return
+        last_end = self.aired[-1].end if self.aired else 0.0
+        if now - last_end < self.fill_after_s:
+            return
+        # How long until something real comes due decides how much can be said in between.
+        room = min((p.due for p in self.pending), default=now + 99.0) - now - self.gap_s
+        if room < 1.3:
+            return
+        analyst = self.analyst is not None and self._fill_turn % 2 == 1
+        self._fill_turn += 1
+        kind, speaker = ("colour.filler", "analyst") if analyst else ("filler", "lead")
+        if room < 3.2:
+            kind += ".short"
+        self.offer(Moment(now, kind, PRIORITY["filler"], None, None, {"immediate": True},
+                          speaker=speaker), now)
 
     def poll(self, now: float) -> List[Spoken]:
         """Start whichever line should start now. Call this often (every frame)."""
@@ -300,22 +350,43 @@ class LiveDirector:
             if now - p.due > _ttl(p.moment.priority):
                 self.pending.remove(p)
                 self.dropped.append((p.moment.kind, p.text, "too late to be worth saying"))
+        self._fill_silence(now)
         while True:
-            ready = [p for p in self.pending if p.due <= now and p.ready <= now]
+            ready = sorted((p for p in self.pending if p.due <= now and p.ready <= now),
+                           key=lambda p: (-p.moment.priority, p.due))
             if not ready:
                 break
-            best = max(ready, key=lambda p: (p.moment.priority, -p.due))
+            best = None
             if now < self.busy_until:
                 current = self.aired[-1]
-                may_interrupt = (best.moment.priority >= 90 and current.priority < 60
-                                 and self.busy_until - now > 0.6)
+                # A goal or penalty cuts across anything minor; a time-critical call (a set
+                # piece being taken, a shot) cuts across small talk rather than arrive late.
+                rank = ready[0].moment.priority
+                may_interrupt = self.busy_until - now > 0.4 and (
+                    (rank >= 90 and current.priority < 60)
+                    or (rank >= 55 and current.priority < 50))
                 if not may_interrupt:
                     break
                 current.cut_at = now
                 self.busy_until = now
+                best = ready[0]
             else:
-                pad = self.gap_s if best.moment.priority >= 40 else self.quiet_s
-                if self.aired and now < self.aired[-1].end + pad:
+                for candidate in ready:
+                    pad = self.gap_s if candidate.moment.priority >= 40 else self.quiet_s
+                    if candidate.moment.priority >= 55 and now > candidate.due:
+                        pad = 0.0  # already late for something that matters: no polite pause
+                    if self.aired and now < self.aired[-1].end + pad:
+                        continue
+                    # Thanks to the delay, bigger lines about to come due are already known.
+                    # Do not start something that would still be talking when one arrives;
+                    # keep it for the next gap instead (it expires if none comes in time).
+                    length = len(candidate.audio) / SAMPLE_RATE
+                    if any(p is not candidate and p.moment.priority > candidate.moment.priority
+                           and now < p.due < now + length + self.gap_s for p in self.pending):
+                        continue
+                    best = candidate
+                    break
+                if best is None:
                     break
             self.pending.remove(best)
             m = best.moment
@@ -369,10 +440,12 @@ def latency_report(aired: Sequence[Spoken], delay_s: float) -> Dict[str, object]
     """How live the commentary was."""
     if not aired:
         return {"lines": 0}
-    knew_after = np.array([max(0.0, s.decided_t - s.event_t) for s in aired])
-    late = np.array([s.late_by for s in aired])
+    calls = [s for s in aired if not s.kind.endswith("filler")] or list(aired)
+    knew_after = np.array([max(0.0, s.decided_t - s.event_t) for s in calls])
+    late = np.array([s.late_by for s in calls])
     return {
         "lines": len(aired),
+        "lines_about_the_match": len(calls),
         "delay_buffer_s": delay_s,
         "knew_after_event_s": {"median": round(float(np.median(knew_after)), 2),
                                "worst": round(float(knew_after.max()), 2)},

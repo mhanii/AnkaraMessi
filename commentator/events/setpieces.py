@@ -159,8 +159,15 @@ def _taken(tl: Timeline, w: Window, cfg: RuleConfig):
     if w.i1 >= len(tl) - 1 - tl.frames_for(0.3):
         return False, 0.6, w.t1  # the clip ends while the ball is still waiting
     end = min(len(tl) - 1, w.i1 + tl.frames_for(cfg.taken_window_s))
+    confirm = tl.frames_for(cfg.taken_confirm_s)
     for k in range(w.i1 + 1, end + 1):
         if tl.known[k] and dist(tl.ball[k], w.xy) >= cfg.taken_move_m:
+            # A ball that really left does not turn up on the spot again a moment later.
+            if any(tl.known[m] and dist(tl.ball[m], w.xy) <= 1.5 * cfg.still_radius_m
+                   for m in range(k + 1, min(len(tl), k + confirm + 1))):
+                continue
+            if len(tl) - 1 - k < confirm:
+                return False, 0.6, w.t1  # seen away, but too recently to be sure
             blind = float(tl.t[k]) - w.t1
             if blind <= cfg.taken_blind_s:
                 return True, 0.9, w.t1

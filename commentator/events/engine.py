@@ -11,6 +11,7 @@ from ..possession import possession_segments
 from ..timeline import Timeline
 from .passing import detect_passes
 from .phases import detect_phases
+from .play import detect_play
 from .setpieces import detect_kickoffs_by_formation, detect_set_pieces
 from .shots import detect_shots
 from .throwins import detect_throw_ins
@@ -40,6 +41,10 @@ def detect_events(tl: Timeline, cfg: RuleConfig = DEFAULT) -> List[Event]:
 
     _reconcile(set_pieces, shots, passes, segments, cfg)
     events = set_pieces + throw_ins + shots + passes + detect_phases(tl, cfg)
+    # While a set piece is waiting there is no open play to describe.
+    waits = [(float(sp.detail.get("setup_t", sp.t)) - 0.5, sp.t + 0.5) for sp in set_pieces]
+    events += [e for e in detect_play(tl, segments, passes, cfg)
+               if not any(a <= e.t <= b for a, b in waits)]
     events.sort(key=lambda e: (e.t, e.type))
     return events
 

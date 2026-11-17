@@ -136,7 +136,6 @@ class Perception:
         self.records: List[FrameRecord] = []
         self.teams = TeamClassifier()
         self.class_votes: Dict[int, Counter] = defaultdict(Counter)
-        self.keepers: set = set()
         self.picker: Optional[_BallPicker] = None
         self.frame_size = (0, 0)
         self.timing: Counter = Counter()
@@ -214,11 +213,8 @@ class Perception:
         split = self.teams.finalize([t for t, r in roles.items() if r != REFEREE])
         team_of, colours = self._stable_labels(split)
         positions = _smooth_positions(records, roles)
-        # Once a track has been recognised as a goalkeeper it stays one.
-        self.keepers.update(_find_keepers(positions, roles, split))
-        for tid in self.keepers:
-            if tid in roles:
-                roles[tid] = GOALKEEPER
+        for tid in _find_keepers(positions, roles, split):
+            roles[tid] = GOALKEEPER
         _assign_keeper_teams(positions, roles, team_of)
 
         states: List[FrameState] = []
@@ -310,21 +306,36 @@ def _smooth_positions(records: List[FrameRecord], roles: Dict[int, str],
 
 
 def _find_keepers(positions, roles: Dict[int, str], split) -> List[int]:
-    """Goalkeepers, with no model: a track whose shirt matches neither team and who stays
-    inside a penalty area. The laws require the keeper's kit to differ from both teams, and
-    nobody else lives in the box."""
-    in_box: Counter = Counter()
+    """Goalkeepers, with no model. A keeper wears a kit that matches neither team (the laws
+    require it), stays close to one goal, and is the deepest player at that end.
+
+    All three are needed. Colour alone picks up short, noisy track fragments; "is in the box"
+    alone picks up a penalty taker waiting on the spot.
+    """
     seen: Counter = Counter()
+    deepest: Counter = Counter()
+    depths: Dict[int, List[float]] = defaultdict(list)
     for here in positions:
+        if not here:
+            continue
+        for side in ("left", "right"):
+            end = {tid: goal_line_depth(x, side) for tid, (x, _) in here.items()
+                   if goal_line_depth(x, side) <= LENGTH / 2}
+            if end:
+                deepest[min(end, key=end.get)] += 1
         for tid, (x, y) in here.items():
             seen[tid] += 1
-            depth = min(x, LENGTH - x)
-            if depth <= PENALTY_AREA_DEPTH + 1.5 and abs(y - WIDTH / 2.0) <= PENALTY_AREA_HALF_WIDTH:
-                in_box[tid] += 1
+            if abs(y - WIDTH / 2.0) <= PENALTY_AREA_HALF_WIDTH:
+                depths[tid].append(min(x, LENGTH - x))
     threshold = max(18.0, 2.5 * split.typical)
-    return [tid for tid, off in split.off_colour.items()
-            if roles.get(tid) == PLAYER and off >= threshold
-            and seen[tid] >= 5 and in_box[tid] >= 0.7 * seen[tid]]
+    keepers = []
+    for tid, off in split.off_colour.items():
+        if roles.get(tid) != PLAYER or off < threshold or seen[tid] < 15:
+            continue
+        near_goal = len(depths[tid]) >= 0.8 * seen[tid] and float(np.median(depths[tid])) <= 11.0
+        if near_goal and deepest[tid] >= 0.7 * seen[tid]:
+            keepers.append(tid)
+    return keepers
 
 
 def _assign_keeper_teams(positions, roles: Dict[int, str], team_of: Dict[int, int]) -> None:

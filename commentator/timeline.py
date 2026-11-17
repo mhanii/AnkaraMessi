@@ -64,6 +64,7 @@ class Timeline:
         n = len(self)
         gap_max = self.frames_for(max_gap_s)
         min_n = self.frames_for(min_s)
+        outlier_n = self.frames_for(1.0)
         out: List[Window] = []
         k = 0
         while k < n:
@@ -80,7 +81,15 @@ class Timeline:
                 if nxt >= n or not self.known[nxt]:
                     break
                 if float(np.hypot(*(self.ball[nxt] - median))) > radius_m:
-                    break
+                    # One stray detection elsewhere does not mean the ball left: if it is
+                    # found back on the spot within a second, carry on from there.
+                    back = next((m for m in range(nxt + 1, min(n, nxt + outlier_n + 1))
+                                 if self.known[m]
+                                 and float(np.hypot(*(self.ball[m] - median))) <= radius_m),
+                                None)
+                    if back is None:
+                        break
+                    nxt = back
                 pts.append(self.ball[nxt])
                 j = nxt
                 if len(pts) % 5 == 0:

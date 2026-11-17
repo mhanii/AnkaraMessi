@@ -64,7 +64,7 @@ def draw_minimap(state: Optional[FrameState], colours: Dict[int, np.ndarray],
     return img
 
 
-def _caption(frame: np.ndarray, text: str) -> None:
+def _caption(frame: np.ndarray, text: str, speaker: str = "lead") -> None:
     h, w = frame.shape[:2]
     scale = w / 1280.0 * 0.85
     thick = max(1, int(round(2 * w / 1280.0)))
@@ -83,11 +83,15 @@ def _caption(frame: np.ndarray, text: str) -> None:
     overlay = frame.copy()
     cv2.rectangle(overlay, (int(0.07 * w), y0), (int(0.93 * w), y0 + box_h), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+    analyst = speaker == "analyst"
+    colour = (150, 235, 255) if analyst else (255, 255, 255)  # the analyst speaks in amber
+    label = "ANALYST" if analyst else "COMMENTARY"
+    cv2.putText(frame, label, (int(0.07 * w) + int(0.01 * w), y0 - int(0.012 * w)), FONT,
+                scale * 0.55, colour, max(1, thick - 1), cv2.LINE_AA)
     for i, r in enumerate(rows):
         tw = cv2.getTextSize(r, FONT, scale, thick)[0][0]
         y = y0 + int(0.3 * line_h) + (i + 1) * line_h - int(0.35 * line_h)
-        cv2.putText(frame, r, ((w - tw) // 2, y), FONT, scale, (255, 255, 255), thick,
-                    cv2.LINE_AA)
+        cv2.putText(frame, r, ((w - tw) // 2, y), FONT, scale, colour, thick, cv2.LINE_AA)
 
 
 def _tag(frame: np.ndarray, text: str) -> None:
@@ -100,10 +104,26 @@ def _tag(frame: np.ndarray, text: str) -> None:
     cv2.putText(frame, text, (x, y), FONT, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
 
+def _badge(frame: np.ndarray, text: str) -> None:
+    h, w = frame.shape[:2]
+    scale = w / 1280.0 * 0.5
+    thick = max(1, int(round(w / 1280.0)))
+    (tw, th), _ = cv2.getTextSize(text, FONT, scale, thick)
+    x, y = int(0.025 * w), h - int(0.02 * w)
+    cv2.circle(frame, (x + th // 2, y - th // 2), th // 2, (40, 40, 230), -1, cv2.LINE_AA)
+    cv2.putText(frame, text, (x + int(1.6 * th), y), FONT, scale, (255, 255, 255), thick,
+                cv2.LINE_AA)
+
+
 def render(source: Path, analysis: Analysis, events: Sequence[Event], lines: Sequence[Line],
            out_path: Path, audio_path: Optional[Path] = None, out_width: int = 1280,
-           default_fps: float = 25.0) -> Path:
-    """Write an annotated video (with the commentary audio, if given) to `out_path`."""
+           default_fps: float = 25.0, badge: Optional[str] = None,
+           overlay: str = "none") -> Path:
+    """Write the video with captions (and the commentary audio, if given) to `out_path`.
+
+    `overlay` controls what else is drawn: "none" leaves the picture clean, "map" adds the
+    top-down mini-map, "full" also marks every tracked player and the ball (a debug view).
+    """
     src_fps, _, frames = open_source(source, default_fps)
     index_to_record = {rec.index: k for k, rec in enumerate(analysis.records)}
     last_index = analysis.records[-1].index if analysis.records else -1
@@ -121,38 +141,42 @@ def render(source: Path, analysis: Analysis, events: Sequence[Event], lines: Seq
         h, w = frame.shape[:2]
         unit = w / 1920.0
 
-        for d in rec.detections:
-            if d.cls == BALL or d.track_id is None:
-                continue
-            role = analysis.roles.get(d.track_id)
-            if role == REFEREE:
-                continue
-            x1, _, x2, y2 = d.box
-            colour = (0, 220, 255) if role == GOALKEEPER else \
-                _colour(analysis.team_of.get(d.track_id), analysis.team_colours)
-            centre = (int((x1 + x2) / 2), int(y2))
-            axes = (max(8, int((x2 - x1) * 0.55)), max(4, int((x2 - x1) * 0.2)))
-            cv2.ellipse(frame, centre, axes, 0, -30, 210, (0, 0, 0), int(6 * unit) + 1, cv2.LINE_AA)
-            cv2.ellipse(frame, centre, axes, 0, -30, 210, colour, int(3 * unit) + 1, cv2.LINE_AA)
-        if rec.ball is not None:
-            bx, by = rec.ball.centre_px
-            s = int(14 * unit)
-            tri = np.array([[bx, by - s], [bx - s, by - 2.6 * s], [bx + s, by - 2.6 * s]], np.int32)
-            cv2.fillPoly(frame, [tri], (255, 255, 255), cv2.LINE_AA)
-            cv2.polylines(frame, [tri], True, (0, 0, 0), max(1, int(2 * unit)), cv2.LINE_AA)
+        if overlay == "full":
+            for d in rec.detections:
+                if d.cls == BALL or d.track_id is None:
+                    continue
+                role = analysis.roles.get(d.track_id)
+                if role == REFEREE:
+                    continue
+                x1, _, x2, y2 = d.box
+                colour = (0, 220, 255) if role == GOALKEEPER else \
+                    _colour(analysis.team_of.get(d.track_id), analysis.team_colours)
+                centre = (int((x1 + x2) / 2), int(y2))
+                axes = (max(8, int((x2 - x1) * 0.55)), max(4, int((x2 - x1) * 0.2)))
+                cv2.ellipse(frame, centre, axes, 0, -30, 210, (0, 0, 0), int(6 * unit) + 1, cv2.LINE_AA)
+                cv2.ellipse(frame, centre, axes, 0, -30, 210, colour, int(3 * unit) + 1, cv2.LINE_AA)
+            if rec.ball is not None:
+                bx, by = rec.ball.centre_px
+                s = int(14 * unit)
+                tri = np.array([[bx, by - s], [bx - s, by - 2.6 * s], [bx + s, by - 2.6 * s]], np.int32)
+                cv2.fillPoly(frame, [tri], (255, 255, 255), cv2.LINE_AA)
+                cv2.polylines(frame, [tri], True, (0, 0, 0), max(1, int(2 * unit)), cv2.LINE_AA)
 
-        mini = draw_minimap(state, analysis.team_colours, width=int(430 * unit))
-        mh, mw = mini.shape[:2]
-        x0, y0 = w - mw - int(24 * unit), int(24 * unit)
-        frame[y0:y0 + mh, x0:x0 + mw] = cv2.addWeighted(frame[y0:y0 + mh, x0:x0 + mw], 0.25,
-                                                        mini, 0.75, 0)
+        if overlay in ("map", "full"):
+            mini = draw_minimap(state, analysis.team_colours, width=int(430 * unit))
+            mh, mw = mini.shape[:2]
+            x0, y0 = w - mw - int(24 * unit), int(24 * unit)
+            frame[y0:y0 + mh, x0:x0 + mw] = cv2.addWeighted(frame[y0:y0 + mh, x0:x0 + mw], 0.25,
+                                                            mini, 0.75, 0)
 
         active = [e for e in tags if e.t <= t <= e.t + 2.5]
-        if active:
+        if active and overlay != "none":
             _tag(frame, EVENT_LABELS[active[-1].type])
         spoken = [ln for ln in lines if ln.t <= t <= ln.end + 0.5]
         if spoken:
-            _caption(frame, spoken[-1].text)
+            _caption(frame, spoken[-1].text, spoken[-1].speaker)
+        if badge:
+            _badge(frame, badge)
 
         out_h = int(round(h * out_width / w / 2) * 2)
         small = cv2.resize(frame, (out_width, out_h), interpolation=cv2.INTER_AREA)

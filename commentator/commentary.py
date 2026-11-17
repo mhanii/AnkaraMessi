@@ -58,14 +58,18 @@ PRIORITY = {
     "shot": 75, "corner_kick": 60, "corner_kick.setup": 58, "free_kick": 55,
     "free_kick.setup": 50, "kick_off": 52, "kick_off.setup": 45, "colour": 44,
     "long_throw": 42, "goal_kick": 40, "hand_throw": 38, "throw_in": 36, "long_pass": 35,
-    "replay": 32, "goal_kick.setup": 30, "pressure": 28, "turnover": 25, "spell": 20,
+    "box_entry": 48, "final_third": 34, "replay": 32, "carry": 31, "goal_kick.setup": 30,
+    "break": 46, "pressure": 28, "turnover": 25, "flank": 24, "pass": 22, "spell": 20,
+    "shape_deep": 19, "high_line": 19, "on_ball": 18, "midfield": 16, "numbers": 15,
+    "situation": 14, "filler": 5,
 }
 BIG_MOMENTS = ("goal", "penalty", "shot", "save")
 
 # How a line should sound. The voice is rendered differently for each (see speech.py).
 TONES = {"excited": ("goal", "penalty", "save", "shot", "corner_kick", "long_throw",
-                     "kick_off", "free_kick"),
-         "tense": ("penalty.setup", "free_kick.setup.near", "corner_kick.setup",
+                     "kick_off", "free_kick", "break", "box_entry", "carry"),
+         "tense": ("penalty.setup", "free_kick.setup.near", "corner_kick.setup", "final_third",
+                   "pressure",
                    "corner_kick.crowd", "colour.penalty", "colour.free_kick"),
          "down": ("shot.off_target", "goal.cancelled", "colour.cancelled", "colour.miss")}
 
@@ -140,9 +144,96 @@ TEMPLATES: Dict[str, List[str]] = {
     "pressure": ["{team} have {count} players up in the final third.",
                  "{team} are pushing men forward here.",
                  "It's all {team} for the moment, camped in the attacking third."],
-    "replay": ["Let's have another look at that.", "Here's the replay."],
+    "replay": ["Let's have another look at that.", "Here's the replay.",
+               "Another angle of it for you.", "Watch this again."],
     "spell": ["{team} are keeping the ball well.", "Patient passing from {team}.",
               "{team} knocking it around."],
+
+    # ---- running play-by-play: short and frequent, so it never goes quiet ----
+    "pass": ["Neat pass.", "Finds a team-mate.", "{team} keep it moving.", "Tidy from {team}.",
+             "Simple ball.", "On it goes."],
+    "pass.forward": ["Played forward.", "{team} look to go through the lines.",
+                     "Good ball up the pitch.", "Forward it goes.", "Positive from {team}."],
+    "pass.back": ["Back it goes.", "{team} recycle possession.", "Played back to keep it.",
+                  "No rush from {team}."],
+    "pass.square": ["Squared across.", "Simple ball sideways.",
+                    "{team} shift it across the pitch.", "Worked across."],
+    "on_ball": ["{team} on the ball {where}.", "{team} have it {where}.",
+                "It's with {team} {where}.", "{team} in possession {where}."],
+    "carry": ["{team} drive forward with it!", "He carries it {distance} metres!",
+              "Good run with the ball from {team}!", "He's away, striding forward!",
+              "{team} run at them!"],
+    "final_third": ["{team} are into the final third.", "{team} push up towards goal.",
+                    "Danger building for {team} here.", "{team} are knocking on the door."],
+    "final_third.nobody": ["Play moves up towards the {side}-hand goal.",
+                           "The action is down at the {side} end now."],
+    "box_entry": ["It's in the box!", "Into the penalty area!", "{team} get it into the area!",
+                  "Danger here, it's in the box!"],
+    "flank": ["Out to the {flank} side.", "They switch it to the {flank} flank.",
+              "Width on the {flank} side.", "Worked out to the {flank} touchline."],
+    "midfield": ["Back into midfield.", "The game settles in the middle third.",
+                 "It's being contested in the middle of the park."],
+    "break": ["{team} break forward at pace!", "Here come {team} on the counter!",
+              "{team} are away, and they've got numbers!", "Quick transition from {team}!"],
+    "break.nobody": ["It's a break, and it's quick!", "Suddenly it opens up!",
+                     "They pour forward towards the {side}-hand goal!"],
+    "situation.third": ["Play is deep in {team} territory{wide}.",
+                        "We're down in the {team} third{wide}.",
+                        "{team} are being asked to defend{wide}.",
+                        "It's all happening around the {team} box{wide}."],
+    "situation.third.nobody": ["Play is down at the {side}-hand end{wide}.",
+                               "It's all happening in the {side}-hand third{wide}."],
+    "situation.middle": ["They're scrapping for it in the middle third{wide}.",
+                         "It's congested in midfield{wide}.",
+                         "The game is being played in the middle of the park{wide}.",
+                         "No way through yet, it stays in midfield{wide}."],
+    "numbers": ["{team} have the extra men around the ball.",
+                "{team} are swarming around it.", "Plenty of {team} shirts near the ball."],
+    "shape_deep": ["{team} have {count} men behind the ball.", "{team} are sitting deep.",
+                   "{team} are happy to defend in numbers."],
+    "high_line": ["{team} holding a high line.", "{team} squeeze right up the pitch.",
+                  "Brave from {team}, with the back line that high."],
+    "filler": ["Good tempo to this game.", "Both sides probing for an opening.",
+               "Still all to play for.", "Tight, this. Very tight.",
+               "The intensity has not dropped at all.", "You would not want to call this one.",
+               "They are making each other work for every yard.",
+               "Lovely evening for it, and a game to match.",
+               "Concentration is everything at this level.",
+               "It could swing either way from here.",
+               "You sense a chance is coming.", "The crowd are right into this.",
+               "Neither side giving an inch.", "Plenty of energy out there.",
+               "This is nicely poised.", "Patience is the word here.",
+               "End to end stuff at times.", "A real battle for control."],
+    "filler.short": ["Here we go.", "Good tempo.", "Nicely poised.", "Tense stuff.",
+                     "On we go.", "Plenty going on.", "Everyone's switched on."],
+    "colour.filler.short": ["Good shape.", "I like that.", "Smart play.", "Real quality on show.",
+                            "That's the standard."],
+    "colour.break": ["That's the pace they have on the counter.",
+                     "When they go, they really go.", "That's a lot of grass to run into."],
+    "colour.box": ["You cannot switch off for a second in there.",
+                   "That's where defenders earn their money.",
+                   "Any touch in there could be a goal."],
+    "colour.deep": ["They'll invite pressure defending that deep.",
+                    "It's a risk, sitting back like that."],
+    "colour.high_line": ["That's brave with pace in behind them.",
+                         "One ball over the top and they are in trouble."],
+    "colour.long_pass": ["That's a lovely range of passing.",
+                         "He's seen that early, and it's a great ball."],
+    "colour.wait": ["The big men are coming up for this.", "This is a real chance to deliver.",
+                    "Watch the movement in the box here.", "Everybody is picking up a man."],
+    "colour.filler": ["I like the intent from both sides.", "It's a proper contest, this.",
+                      "The first goal is going to be massive.",
+                      "Look at the work rate, it's relentless.",
+                      "This is where games are won, in the details.",
+                      "Somebody needs to take a risk, for me.",
+                      "They've clearly done their homework on each other.",
+                      "The midfield battle is deciding everything right now.",
+                      "I'd like to see them be a bit braver on the ball.",
+                      "The shape of both teams is very disciplined.",
+                      "Whoever takes their chance wins this, for me.",
+                      "You can see how much it means to them.",
+                      "They are working so hard off the ball.",
+                      "It only takes one moment of quality."],
 
     # ---- analyst: reacts a beat later, from the running match facts ----
     "colour.goal": ["That is a finish of real quality. {team} took their moment.",
@@ -177,7 +268,8 @@ TEMPLATES: Dict[str, List[str]] = {
 
 class TemplateNarrator:
     def __init__(self, team_names: Optional[Dict[int, str]] = None, seed: int = 7):
-        self.team_names = team_names or {}
+        # Keep the caller's dict (even when empty): live, names are filled in as they are learned.
+        self.team_names = team_names if team_names is not None else {}
         self.rng = random.Random(seed)
         self._last: Dict[str, str] = {}
 
@@ -202,7 +294,8 @@ class TemplateNarrator:
         usable = [o for o in options if team is not None or "{team}" not in o]
         usable = [o for o in usable if all(f"{{{k}}}" not in o or k in moment.data or k == "team"
                                            for k in ("count", "range", "distance", "corner",
-                                                     "touchline", "nth", "n"))]
+                                                     "touchline", "nth", "n", "where",
+                                                     "flank", "side", "wide"))]
         if not usable:
             return None
         # Avoid saying the exact same sentence twice in a row for one kind of moment.
@@ -226,6 +319,15 @@ def event_data(e: Event) -> Dict[str, object]:
         data["touchline"] = str(e.detail["touchline"])
     if e.type == "pressure":
         data["count"] = spell_small(int(e.detail.get("players_forward", 5)))
+    for key in ("where", "flank", "side"):
+        if key in e.detail and e.type in ("on_ball", "flank", "final_third", "box_entry",
+                                          "break"):
+            data[key] = str(e.detail[key])
+    if e.type == "shape_deep":
+        data["count"] = spell_small(int(e.detail.get("count", 8)))
+    if e.type == "situation":
+        data["wide"] = str(e.detail.get("wide", ""))
+        data["side"] = str(e.detail.get("side", ""))
     return data
 
 

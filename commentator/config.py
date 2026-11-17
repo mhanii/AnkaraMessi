@@ -22,6 +22,8 @@ class RuleConfig:
     still_merge_dist_m: float = 1.5
     taken_move_m: float = 3.0  # ball this far from the spot = the set piece was taken
     taken_window_s: float = 5.0
+    taken_confirm_s: float = 1.0  # the ball must stay away this long (one stray detection
+    #                               elsewhere is common with a weak detector)
     taken_blind_s: float = 1.0  # longer than this unseen = the kick happened in the gap
     taken_refound_lag_s: float = 0.3  # a re-found ball left the spot about this long ago
 
@@ -82,6 +84,25 @@ class RuleConfig:
     throw_min_lift_m: float = 0.8  # a held ball projects beyond the feet; one at the feet does not
     long_throw_m: float = 18.0
     throw_receive_s: float = 4.0
+
+    # --- Running play-by-play (chatty on purpose, not scored) ---
+    play_zone_hold_s: float = 0.8  # the action must stay in a new zone this long to be called
+    play_box_repeat_s: float = 6.0
+    play_on_ball_min_s: float = 0.6
+    play_on_ball_repeat_s: float = 2.5
+    play_carry_min_s: float = 1.2
+    play_carry_min_m: float = 8.0
+    shape_min_s: float = 2.0
+    shape_deep_zone_m: float = 35.0  # own third
+    shape_deep_players: int = 8
+    shape_high_line_m: float = 35.0  # deepest outfield player this far from their own goal
+    shape_repeat_s: float = 15.0
+    break_window_s: float = 4.0
+    break_min_m: float = 28.0  # the action moved this far up the pitch within the window
+    break_repeat_s: float = 8.0
+    situation_every_s: float = 3.0
+    numbers_radius_m: float = 12.0
+    numbers_repeat_s: float = 10.0
 
     # --- Phases of play (no ball needed) ---
     pressure_zone_m: float = 35.0  # the attacking third

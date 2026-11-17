@@ -106,7 +106,9 @@ def test_short_and_long_pass_survive_an_airborne_ball():
 def test_a_dribble_is_not_a_pass():
     players = {**squad(0, 1, [(30, 30)]), **squad(1, 11, [(60, 10)])}
     scene = Scene(players, ball=(30.5, 30.0)).hold(0.5).roll(4.0, (55.0, 36.0), carrier=1)
-    assert events_of(scene) == []
+    events = events_of(scene)
+    assert "pass" not in kinds(events) and "long_pass" not in kinds(events)
+    assert one(events, "carry").distance_m > 20      # it is a run with the ball instead
 
 
 def test_turnover_is_called_once_the_other_team_keeps_the_ball():
@@ -224,7 +226,7 @@ def test_throw_in_short_and_long():
 def test_a_winger_running_down_the_line_with_the_ball_is_not_a_throw_in():
     players = {**squad(0, 1, [(40.0, 0.5)]), **squad(1, 11, [(50, 30)])}
     scene = Scene(players, ball=(40.3, 0.6)).hold(0.3).roll(3.0, (62.0, 1.0), carrier=1)
-    assert events_of(scene) == []
+    assert not {"throw_in", "long_throw"} & set(kinds(events_of(scene)))
 
 
 def test_a_ball_carried_while_walking_is_not_a_throw_in():
@@ -232,3 +234,48 @@ def test_a_ball_carried_while_walking_is_not_a_throw_in():
     scene = Scene(players, ball=(40.0, 0.2)).in_hands(1.0, 1)
     scene.put(1, (46.0, 0.2)).in_hands(1.0, 1)
     assert "throw_in" not in kinds(events_of(scene))
+
+
+def test_play_by_play_follows_the_action_up_the_pitch():
+    attackers = [(50, 30), (72, 28), (86, 36)]
+    players = {**squad(0, 1, attackers), **squad(1, 11, [(95, 30), (98, 38)]), **RIGHT_KEEPER}
+    scene = (Scene(players, ball=(50.0, 30.5)).hold(1.5).roll(1.0, (72.0, 28.5)).hold(1.5)
+             .roll(1.0, (86.0, 36.5)).hold(2.0))
+    events = events_of(scene)
+    said = kinds(events)
+    assert "on_ball" in said and "final_third" in said and "box_entry" not in said
+    third = one(events, "final_third")
+    assert third.team == 0 and third.detail["side"] == "right"
+    forward = [e for e in events if e.type == "pass"]
+    assert forward and all(e.detail["direction"] == "forward" for e in forward)
+
+
+def test_ball_into_the_box_is_called():
+    players = {**squad(0, 1, [(80, 30), (96, 33)]), **squad(1, 11, [(99, 40)]), **RIGHT_KEEPER}
+    scene = Scene(players, ball=(80.0, 30.5)).hold(1.0).roll(1.0, (96.0, 33.5)).hold(1.5)
+    assert one(events_of(scene), "box_entry").team == 0
+
+
+def test_the_play_point_falls_back_to_the_players_when_the_ball_is_not_seen():
+    from commentator.events.play import play_points
+
+    players = {**squad(0, 1, [(80, 30), (84, 34), (88, 30)]), **squad(1, 11, [(90, 36), (86, 40)])}
+    scene = Scene(players, ball=(10.0, 10.0)).hold(0.2).hide(0.2)
+    points = play_points(Timeline(scene.frames(), scene.fps, max_gap_s=0.0))
+    assert points[0] == (10.0, 10.0) and points[-1] == (86.0, 34.0)
+
+
+def test_team_shape_is_described_from_positions_alone():
+    defenders = [(20, 10), (22, 25), (21, 40), (23, 55), (28, 18), (30, 34), (29, 50), (33, 30)]
+    attackers = [(40, 30), (45, 20), (45, 45), (50, 34), (55, 30), (60, 34)]
+    players = {**squad(0, 1, defenders), **squad(1, 11, attackers), **keeper(0, 90, (2.0, 34.0))}
+    scene = Scene(players, ball=(40.0, 30.5)).hide(4.0)
+    deep = one(events_of(scene), "shape_deep")
+    assert deep.team == 0 and deep.detail["count"] == 8
+
+
+def test_a_fast_break_is_called():
+    attackers = [(30, 30), (70, 30)]
+    players = {**squad(0, 1, attackers), **squad(1, 11, [(80, 40)]), **RIGHT_KEEPER}
+    scene = Scene(players, ball=(30.0, 30.5)).hold(1.0).roll(2.5, (70.0, 30.5)).hold(1.0)
+    assert one(events_of(scene), "break").detail["side"] == "right"
