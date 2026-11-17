@@ -87,9 +87,11 @@ class PitchCalibrator:
 
         self.model = YOLO(str(weights))
         self.imgsz, self.device = imgsz, device
+        self.half = bool(device) and str(device).startswith("cuda")
 
     def calibrate(self, frame: np.ndarray) -> Optional[Homography]:
-        result = self.model(frame, imgsz=self.imgsz, verbose=False, device=self.device)[0]
+        result = self.model(frame, imgsz=self.imgsz, verbose=False, device=self.device,
+                            half=self.half)[0]
         if result.boxes is None or len(result.boxes) == 0 or result.keypoints is None:
             return None
         best = int(result.boxes.conf.argmax())

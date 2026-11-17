@@ -166,7 +166,7 @@ def test_numbers_are_spelled_out_for_speech():
 
 def test_mix_places_each_line_at_its_time():
     beep = np.ones(SAMPLE_RATE // 2, np.float32) * 0.5
-    track = mix([Line(1.0, "x", "k", 1), Line(3.0, "y", "k", 1)], [beep, beep], 5.0)
+    track = mix([1.0, 3.0], [beep, beep], 5.0)
     assert track[int(0.5 * SAMPLE_RATE)] == 0 and track[int(1.2 * SAMPLE_RATE)] > 0
     assert track[int(2.0 * SAMPLE_RATE)] == 0 and track[int(3.2 * SAMPLE_RATE)] > 0
     assert len(track) >= 5 * SAMPLE_RATE
@@ -215,3 +215,35 @@ def test_llm_narrator_rejects_invented_facts_and_failures():
     offline = LLMNarrator(broken, names).say(moment)
     for line in (wrong_team, wrong_number, rambling, offline):
         assert "White" in line and "Red" not in line and "40" not in line
+
+
+def test_an_interrupted_line_is_cut_off_and_faded():
+    beep = np.ones(SAMPLE_RATE, np.float32) * 0.5
+    track = mix([1.0], [beep], 3.0, cuts=[1.4])
+    assert track[int(1.2 * SAMPLE_RATE)] > 0 and track[int(1.5 * SAMPLE_RATE)] == 0
+
+
+def test_tone_changes_pitch_and_loudness():
+    from commentator.speech import DELIVERY, shape_tone
+
+    tone = np.sin(np.linspace(0, 200 * np.pi, SAMPLE_RATE)).astype(np.float32)
+    excited, down = shape_tone(tone, DELIVERY["excited"]), shape_tone(tone, DELIVERY["down"])
+    assert len(excited) < len(tone) < len(down)          # higher pitch = shorter, lower = longer
+    assert np.abs(excited).max() > np.abs(down).max()    # and louder
+
+
+def test_booth_speaks_a_repeated_line_for_free():
+    from commentator.speech import Booth
+
+    class Fake:
+        calls = 0
+
+        def synthesize(self, text, voice=None, tone="calm"):
+            Fake.calls += 1
+            return np.ones(100, np.float32)
+
+    booth = Booth(Fake())
+    _, first = booth.say("Corner for White.", "lead", "tense")
+    _, again = booth.say("Corner for White.", "lead", "tense")
+    booth.say("Corner for White.", "analyst", "tense")   # another voice is another recording
+    assert Fake.calls == 2 and again == 0.0 and booth.hits == 1

@@ -30,6 +30,7 @@ class Moment:
     team: Optional[int] = None
     event: Optional[Event] = None
     data: Dict[str, object] = field(default_factory=dict)
+    speaker: str = "lead"  # "lead" calls the play; "analyst" reacts to it
 
 
 @dataclass
@@ -39,6 +40,8 @@ class Line:
     kind: str
     priority: int
     duration: float = 0.0  # seconds of speech; estimated until audio exists
+    speaker: str = "lead"
+    tone: str = "calm"
 
     @property
     def end(self) -> float:
@@ -51,45 +54,77 @@ class Narrator(Protocol):
 
 
 PRIORITY = {
-    "goal": 100, "penalty": 90, "penalty.setup": 88, "save": 80, "shot": 75,
-    "corner_kick": 60, "corner_kick.setup": 58, "free_kick": 55, "free_kick.setup": 50,
-    "kick_off": 52, "kick_off.setup": 45, "goal_kick": 40, "goal_kick.setup": 30,
-    "hand_throw": 38, "throw_in": 36, "long_throw": 42, "long_pass": 35, "turnover": 25,
-    "replay": 32, "pressure": 28, "spell": 20,
+    "goal": 100, "goal.cancelled": 96, "penalty": 90, "penalty.setup": 88, "save": 80,
+    "shot": 75, "corner_kick": 60, "corner_kick.setup": 58, "free_kick": 55,
+    "free_kick.setup": 50, "kick_off": 52, "kick_off.setup": 45, "colour": 44,
+    "long_throw": 42, "goal_kick": 40, "hand_throw": 38, "throw_in": 36, "long_pass": 35,
+    "replay": 32, "goal_kick.setup": 30, "pressure": 28, "turnover": 25, "spell": 20,
 }
 BIG_MOMENTS = ("goal", "penalty", "shot", "save")
 
+# How a line should sound. The voice is rendered differently for each (see speech.py).
+TONES = {"excited": ("goal", "penalty", "save", "shot", "corner_kick", "long_throw",
+                     "kick_off", "free_kick"),
+         "tense": ("penalty.setup", "free_kick.setup.near", "corner_kick.setup",
+                   "corner_kick.crowd", "colour.penalty", "colour.free_kick"),
+         "down": ("shot.off_target", "goal.cancelled", "colour.cancelled", "colour.miss")}
+
+
+def tone_of(kind: str) -> str:
+    for tone in ("down", "tense", "excited"):  # most specific first
+        if kind in TONES[tone]:
+            return tone
+    base = kind.split(".")[0]
+    if kind.startswith("shot.") or base in ("goal",):
+        return "excited"
+    return "calm"
+
+
 TEMPLATES: Dict[str, List[str]] = {
-    "goal": ["GOAL! {team} have scored!", "It's in! A goal for {team}!",
-             "He's done it! {team} find the net!"],
+    # ---- lead commentator: calls the play ----
+    "goal": ["GOAL! {team} have scored!", "It's in! What a moment for {team}!",
+             "Back of the net! {team} strike!", "Oh, he's done it! {team} find the net!",
+             "Yes! {team} have the breakthrough!"],
     "goal.unsure": ["That looks like it's in! {team} think they've scored!",
                     "Is that a goal? It looks like it's crossed the line for {team}!"],
-    "goal.nobody": ["It's in the net! A goal!", "The ball is in the back of the net!"],
+    "goal.nobody": ["It's in the net! A goal!", "The ball is in the back of the net!",
+                    "Oh, that's in! Goal!"],
+    "goal.cancelled": ["No! Hold on, it's not a goal. It stayed out.",
+                       "Wait, no goal! I called that too early."],
     "penalty.setup": ["Penalty to {team}! The ball is on the spot.",
-                      "{team} have a penalty. Everyone else is out of the box."],
-    "penalty": ["Here's the run-up... and it's struck!", "The penalty is taken!"],
-    "save": ["Saved! The {team} keeper gets there.", "Good stop by the {team} goalkeeper!"],
-    "shot": ["A shot from {team}!", "{team} have a go from {range} metres!"],
+                      "{team} have a penalty. Everyone else is out of the box.",
+                      "It's a penalty for {team}. Just the taker and the keeper now."],
+    "penalty": ["Here's the run-up... and it's struck!", "The penalty is taken!",
+                "He steps up... and hits it!"],
+    "save": ["Saved! The {team} keeper gets there.", "Good stop by the {team} goalkeeper!",
+             "Kept out! Strong hands from the {team} keeper."],
+    "shot": ["A shot from {team}!", "{team} have a go from {range} metres!",
+             "{team} let fly!", "An effort at goal from {team}!"],
     "shot.saved": ["{team} shoot, and the keeper deals with it.",
-                   "An effort on target from {team}."],
+                   "An effort on target from {team}, and it's held.",
+                   "{team} test the keeper!"],
     "shot.off_target": ["{team} shoot, but it's off target.",
-                        "A chance for {team}, and it goes wide."],
+                        "A chance for {team}, and it goes wide.",
+                        "Oh, {team} drag it past the post."],
     "shot.behind_for_corner": ["{team} shoot, it's turned behind! That will be a corner.",
                                "An effort from {team}, deflected behind for a corner."],
     "corner_kick.setup": ["Corner for {team}, over on the {corner} side.",
-                          "{team} have a corner to come from the {corner} flag."],
+                          "{team} have a corner to come from the {corner} flag.",
+                          "It's a corner to {team}, {corner} side."],
     "corner_kick.crowd": ["{count} {team} players are waiting in the box.",
                           "{team} have {count} in the area for this one."],
-    "corner_kick": ["The corner is swung in!", "In it comes!"],
-    "free_kick.setup": ["Free kick to {team}.", "{team} have a free kick here."],
+    "corner_kick": ["The corner is swung in!", "In it comes!", "Here's the delivery!"],
+    "free_kick.setup": ["Free kick to {team}.", "{team} have a free kick here.",
+                        "The referee gives {team} a free kick."],
     "free_kick.setup.near": ["Free kick to {team}, about {range} metres from goal.",
                              "{team} have a free kick in a dangerous spot, {range} metres out."],
-    "free_kick": ["The free kick is taken.", "{team} take it."],
+    "free_kick": ["The free kick is taken.", "{team} take it.", "And it's played."],
     "kick_off.setup": ["Both teams are set. We're ready for kick-off.",
                        "The players are in position for the kick-off."],
-    "kick_off": ["And we're under way!", "Kick-off! Here we go."],
+    "kick_off": ["And we're under way!", "Kick-off! Here we go.", "Off we go!"],
     "goal_kick.setup": ["It's a goal kick.", "Goal kick to come."],
-    "goal_kick": ["The goal kick is taken long.", "The keeper restarts play."],
+    "goal_kick": ["The goal kick is taken long.", "The keeper restarts play.",
+                  "Launched upfield by the keeper."],
     "hand_throw": ["The {team} keeper throws it out to start again.",
                    "Quick distribution from the {team} goalkeeper, out of his hands."],
     "throw_in.setup": ["Throw-in to come for {team}, on the {touchline} side.",
@@ -98,14 +133,45 @@ TEMPLATES: Dict[str, List[str]] = {
     "long_throw": ["A long throw from {team}, launched into the mix!",
                    "{team} hurl a long throw towards the box!"],
     "long_pass": ["{team} go long, {distance} metres through the air.",
-                  "A big switch of play from {team}."],
-    "turnover": ["{team} win it back.", "Possession changes hands, {team} have it now."],
+                  "A big switch of play from {team}.",
+                  "{team} look for the long ball."],
+    "turnover": ["{team} win it back.", "Possession changes hands, {team} have it now.",
+                 "Nicked away by {team}."],
     "pressure": ["{team} have {count} players up in the final third.",
                  "{team} are pushing men forward here.",
                  "It's all {team} for the moment, camped in the attacking third."],
     "replay": ["Let's have another look at that.", "Here's the replay."],
     "spell": ["{team} are keeping the ball well.", "Patient passing from {team}.",
               "{team} knocking it around."],
+
+    # ---- analyst: reacts a beat later, from the running match facts ----
+    "colour.goal": ["That is a finish of real quality. {team} took their moment.",
+                    "You have to say {team} had been threatening. Now they've got it."],
+    "colour.goal.nobody": ["The keeper had no chance with that one.",
+                           "That changes the whole feel of this game."],
+    "colour.cancelled": ["It looked in from up here, I have to say. Fine margins.",
+                         "That's the trouble with calling it live. A let-off for the defence."],
+    "colour.first_shot": ["That's the first real sight of goal for {team}.",
+                          "{team} hadn't threatened until then."],
+    "colour.shots": ["That's the {nth} effort from {team} in this spell. They are getting closer.",
+                     "{nth} shot for {team} now. The pressure is building."],
+    "colour.miss": ["He'll be disappointed with that. The chance was there.",
+                    "You'd want the target hit from there."],
+    "colour.save": ["Big save. That keeps his side right in this.",
+                    "That's what the keeper is there for. Excellent reactions."],
+    "colour.penalty": ["Huge moment. It's keeper against taker and nothing else matters.",
+                       "All the pressure is on the taker here."],
+    "colour.corner": ["That's corner number {n} for {team}. They are asking questions.",
+                      "Another corner for {team}, their {nth}. Deliveries will be key."],
+    "colour.first_corner": ["A chance to put it in a dangerous area.",
+                            "Set pieces can decide games like this."],
+    "colour.free_kick": ["That's shooting range. Expect a wall and a strike.",
+                         "From there you fancy a shot, don't you?"],
+    "colour.kick_off": ["Let's see who settles first.", "Both sides will want the early ball."],
+    "colour.pressure": ["{team} have really pinned them back here.",
+                        "It's wave after wave from {team} at the moment."],
+    "colour.long_throw": ["A long throw like that is as good as a corner.",
+                          "That's a real weapon, the long throw."],
 }
 
 
@@ -128,10 +194,15 @@ class TemplateNarrator:
                 kind = "goal.nobody"
             elif moment.event is not None and moment.event.confidence < 0.6:
                 kind = "goal.unsure"
+        if team is None and f"{kind}.nobody" in TEMPLATES:
+            kind = f"{kind}.nobody"
         options = TEMPLATES.get(kind)
         if not options:
             return None
         usable = [o for o in options if team is not None or "{team}" not in o]
+        usable = [o for o in usable if all(f"{{{k}}}" not in o or k in moment.data or k == "team"
+                                           for k in ("count", "range", "distance", "corner",
+                                                     "touchline", "nth", "n"))]
         if not usable:
             return None
         # Avoid saying the exact same sentence twice in a row for one kind of moment.
@@ -142,20 +213,32 @@ class TemplateNarrator:
         return text[0].upper() + text[1:]
 
 
+def event_data(e: Event) -> Dict[str, object]:
+    """The facts of an event that a line may mention."""
+    data: Dict[str, object] = {}
+    if e.distance_m is not None:
+        data["distance"] = int(round(e.distance_m))
+    if "range_m" in e.detail:
+        data["range"] = int(round(float(e.detail["range_m"])))
+    if "corner" in e.detail:
+        data["corner"] = str(e.detail["corner"]).replace("-", " ")
+    if "touchline" in e.detail:
+        data["touchline"] = str(e.detail["touchline"])
+    if e.type == "pressure":
+        data["count"] = spell_small(int(e.detail.get("players_forward", 5)))
+    return data
+
+
+def shot_kind(e: Event) -> str:
+    outcome = e.detail.get("outcome")
+    return f"shot.{outcome}" if f"shot.{outcome}" in TEMPLATES else "shot"
+
+
 def moments_from_events(events: Sequence[Event]) -> List[Moment]:
     """Expand events into sayable moments, including the wait before a set piece."""
     out: List[Moment] = []
     for e in events:
-        data: Dict[str, object] = {}
-        if e.distance_m is not None:
-            data["distance"] = int(round(e.distance_m))
-        if "range_m" in e.detail:
-            data["range"] = int(round(float(e.detail["range_m"])))
-        if "corner" in e.detail:
-            data["corner"] = str(e.detail["corner"]).replace("-", " ")
-
-        if "touchline" in e.detail:
-            data["touchline"] = str(e.detail["touchline"])
+        data = event_data(e)
         if e.type in ("throw_in", "long_throw"):
             if not e.detail.get("taken", True) or float(e.detail.get("held_s", 0)) >= 3.0:
                 out.append(Moment(float(e.detail.get("setup_t", e.t)) + 0.6, "throw_in.setup",
@@ -179,16 +262,11 @@ def moments_from_events(events: Sequence[Event]) -> List[Moment]:
             if taken:
                 out.append(Moment(e.t, e.type, PRIORITY[e.type], e.team, e, data))
         elif e.type == "shot":
-            outcome = e.detail.get("outcome")
-            kind = f"shot.{outcome}" if f"shot.{outcome}" in TEMPLATES else "shot"
-            out.append(Moment(e.t, kind, PRIORITY["shot"], e.team, e, data))
+            out.append(Moment(e.t, shot_kind(e), PRIORITY["shot"], e.team, e, data))
         elif e.type == "replay":
             # Only worth a word when the broadcast cuts away right after something big.
             if any(b.type in BIG_MOMENTS and 0.0 <= e.t - b.t <= 12.0 for b in events):
                 out.append(Moment(e.t + 0.6, "replay", PRIORITY["replay"], None, e, data))
-        elif e.type == "pressure":
-            data["count"] = spell_small(int(e.detail.get("players_forward", 5)))
-            out.append(Moment(e.t, "pressure", PRIORITY["pressure"], e.team, e, data))
         elif e.type in PRIORITY:
             out.append(Moment(e.t, e.type, PRIORITY[e.type], e.team, e, data))
 
@@ -232,7 +310,8 @@ def direct(moments: Sequence[Moment], narrator: Narrator, clip_length: Optional[
             continue
         if clip_length is not None and start + duration > clip_length + 2.0:
             continue
-        placed.append(Line(start, text, m.kind, m.priority, duration))
+        placed.append(Line(start, text, m.kind, m.priority, duration, m.speaker,
+                           tone_of(m.kind)))
     placed.sort(key=lambda ln: ln.t)
     return placed
 
@@ -292,6 +371,8 @@ class LLMNarrator:
         self.style = style
         self.fallback = TemplateNarrator(team_names)
         self.history: List[str] = []
+        self.fallback_text: Optional[str] = None
+        self.accepted = self.rejected = 0
 
     def facts(self, moment: Moment) -> Dict[str, object]:
         facts: Dict[str, object] = {"moment": moment.kind.replace("_", " ").replace(".", ", ")}
@@ -307,19 +388,24 @@ class LLMNarrator:
         facts = "; ".join(f"{k}: {v}" for k, v in self.facts(moment).items())
         recent = " | ".join(self.history[-3:]) or "(nothing yet)"
         return (f"You are {self.style}. Say ONE short line, at most {self.max_words} words, "
-                f"for this moment. Use only these facts and add no others, no names, no "
-                f"numbers that are not listed.\nFacts: {facts}\n"
+                f"for this moment. Use only these facts and add no others: no player names, "
+                f"no score, no numbers that are not listed. Sound {tone_of(moment.kind)}.\n"
+                f"Facts: {facts}\n"
                 f"Your last lines, do not repeat them: {recent}\nLine:")
 
     def say(self, moment: Moment) -> Optional[str]:
         template = self.fallback.say(moment)
+        self.fallback_text = template
         if template is None:
             return None  # the templates refuse moments that lack the facts to be said at all
         try:
             text = str(self.complete(self.prompt(moment))).strip().strip('"').split("\n")[0]
         except Exception:
             text = ""
-        if not self._faithful(text, moment):
+        if self._faithful(text, moment):
+            self.accepted += 1
+        else:
+            self.rejected += 1
             text = template
         self.history.append(text)
         return text
@@ -327,14 +413,28 @@ class LLMNarrator:
     def _faithful(self, text: str, moment: Moment) -> bool:
         if not text or len(text.split()) > self.max_words + 4:
             return False
-        allowed = {str(v) for v in moment.data.values()}
+        allowed = {str(v).lower() for v in moment.data.values()}
         if any(tok not in allowed for tok in _digits(text)):
             return False
+        said = set(_words(text))
+        if any(w in said and w not in allowed and w not in _words(self.fallback_text or "")
+               for w in _NUMBER_WORDS):
+            return False  # "their fifth corner" when the facts say it is the second
         own = self.team_names.get(moment.team) if moment.team is not None else None
         for name in self.team_names.values():
             if name != own and name.lower() in text.lower():
                 return False
         return True
+
+
+_NUMBER_WORDS = ("two three four five six seven eight nine ten eleven twelve second third "
+                 "fourth fifth sixth seventh eighth ninth tenth twice thrice hat-trick").split()
+
+
+def _words(text: str) -> List[str]:
+    import re
+
+    return re.findall(r"[a-z-]+", text.lower())
 
 
 def _digits(text: str) -> List[str]:
@@ -358,3 +458,39 @@ def ollama_complete(model: str, host: str = "http://localhost:11434"):
             return json.loads(response.read())["response"]
 
     return complete
+
+
+def transformers_complete(model_dir: str, max_new_tokens: int = 28):
+    """A `complete` function backed by a small local model run with Hugging Face transformers.
+    Measured with Qwen3 models on a 4-core CPU; see CLAUDE.md for latency."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=torch.float32)
+    model.eval()
+
+    def complete(prompt: str) -> str:
+        messages = [{"role": "user", "content": prompt}]
+        try:  # Qwen3 thinks out loud unless told not to
+            text = tokenizer.apply_chat_template(messages, tokenize=False,
+                                                 add_generation_prompt=True,
+                                                 enable_thinking=False)
+        except TypeError:
+            text = tokenizer.apply_chat_template(messages, tokenize=False,
+                                                 add_generation_prompt=True)
+        inputs = tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True,
+                                 temperature=0.7, top_p=0.9,
+                                 pad_token_id=tokenizer.eos_token_id)
+        return tokenizer.decode(out[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+
+    return complete
+
+
+def make_complete(spec: str):
+    """`ollama:NAME` for a local Ollama server, otherwise a path to a transformers model."""
+    if spec.startswith("ollama:"):
+        return ollama_complete(spec.split(":", 1)[1])
+    return transformers_complete(spec)

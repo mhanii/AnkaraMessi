@@ -165,6 +165,8 @@ def _taken(tl: Timeline, w: Window, cfg: RuleConfig):
             if blind <= cfg.taken_blind_s:
                 return True, 0.9, w.t1
             return True, 0.75, max(w.t1, float(tl.t[k]) - cfg.taken_refound_lag_s)
+    if len(tl) - 1 - w.i1 < tl.frames_for(cfg.taken_window_s):
+        return False, 0.6, w.t1  # not enough footage after the wait to say; still pending
     seen_after = any(tl.known[k] for k in range(w.i1 + 1, end + 1))
     # Ball vanished (camera cut, or struck out of view): most likely taken, less certain.
     return (not seen_after), 0.6, w.t1

@@ -51,13 +51,9 @@ class TeamClassifier:
         self.samples: Dict[int, List[np.ndarray]] = defaultdict(list)
         self.max_samples = max_samples
 
-    def observe(self, frame: np.ndarray, track_id: int,
-                box: Tuple[float, float, float, float]) -> None:
-        if len(self.samples[track_id]) >= self.max_samples:
-            return
-        colour = shirt_colour(frame, box)
-        if colour is not None:
-            self.samples[track_id].append(colour)
+    def add(self, track_id: int, colour: np.ndarray) -> None:
+        if len(self.samples[track_id]) < self.max_samples:
+            self.samples[track_id].append(np.asarray(colour, dtype=float))
 
     def finalize(self, tracks: List[int]) -> "TeamSplit":
         """Split tracks into two teams by shirt colour.

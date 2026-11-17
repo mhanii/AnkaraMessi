@@ -76,17 +76,17 @@ def run(source: Path, out_dir: Path, models: Path, analysis_fps: float = 12.5,
 
     audio_path = None
     if audio and lines:
-        from .speech import KokoroSynthesizer, mix, synthesize_lines, write_wav
+        from .speech import SAMPLE_RATE, Booth, KokoroSynthesizer, mix, write_wav
 
         t0 = time.time()
-        synth = KokoroSynthesizer(models / TTS_MODEL, models / TTS_VOICES, voice=voice)
-        clips = synthesize_lines(lines, synth)
-        from .speech import SAMPLE_RATE
+        booth = Booth(KokoroSynthesizer(models / TTS_MODEL, models / TTS_VOICES, voice=voice),
+                      cache_dir=models / "tts" / "cache", voices={"lead": voice})
+        clips = [booth.say(ln.text, ln.speaker, ln.tone)[0] for ln in lines]
         kept = retime(lines, [len(c) / SAMPLE_RATE for c in clips])
         clips = [c for ln, c in zip(lines, clips) if any(ln is k for k in kept)]
         lines = kept
         audio_path = out_dir / "commentary.wav"
-        write_wav(audio_path, mix(lines, clips, clip_length))
+        write_wav(audio_path, mix([ln.t for ln in lines], clips, clip_length))
         timings["speech_s"] = round(time.time() - t0, 1)
 
     (out_dir / "events.json").write_text(json.dumps([e.to_dict() for e in events], indent=1))

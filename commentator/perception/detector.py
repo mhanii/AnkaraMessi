@@ -38,6 +38,7 @@ class YoloDetector:
         self.names = {k: _ALIASES.get(str(v).lower(), str(v).lower())
                       for k, v in self.model.names.items()}
         self.imgsz, self.conf, self.device = imgsz, conf, device
+        self.half = bool(device) and str(device).startswith("cuda")  # half precision on GPU
         self.people_ids = [k for k, v in self.names.items() if v in _PEOPLE]
         self.tracker = BYTETracker(SimpleNamespace(
             tracker_type="bytetrack", track_high_thresh=0.3, track_low_thresh=0.1,
@@ -46,7 +47,7 @@ class YoloDetector:
 
     def detect(self, frame: np.ndarray, track: bool = True) -> List[Detection]:
         result = self.model(frame, imgsz=self.imgsz, conf=self.conf, verbose=False,
-                            device=self.device)[0]
+                            device=self.device, half=self.half)[0]
         boxes = result.boxes
         if boxes is None or len(boxes) == 0:
             return []
@@ -95,7 +96,7 @@ class YoloDetector:
             return []
         out: List[Detection] = []
         results = self.model(crops, imgsz=size * zoom, conf=conf, verbose=False,
-                             device=self.device)
+                             device=self.device, half=self.half)
         for (x0, y0), result in zip(origins, results):
             if result.boxes is None:
                 continue

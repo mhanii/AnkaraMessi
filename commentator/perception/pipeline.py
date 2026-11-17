@@ -22,7 +22,7 @@ from ..pitch import (CENTRE, CORNERS, LENGTH, PENALTY_AREA_DEPTH, PENALTY_AREA_H
                      PENALTY_SPOTS, WIDTH, goal_line_depth, inside)
 from .calibrate import Homography, PitchCalibrator
 from .detector import YoloDetector
-from .teams import TeamClassifier, colour_name
+from .teams import TeamClassifier, colour_name, shirt_colour
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 # Where a waiting ball is small and far away, and where the rules most need to see it.
@@ -36,6 +36,9 @@ class FrameRecord:
     detections: List[Detection]
     homography: Optional[Homography]
     ball: Optional[Detection] = None  # the ball detection accepted for this frame
+    positions: Dict[int, Tuple[float, float]] = field(default_factory=dict)  # people, metres
+    ball_xy: Optional[Tuple[float, float]] = None  # ball projected onto the pitch
+    colours: Dict[int, np.ndarray] = field(default_factory=dict)  # shirt colour per person
 
 
 @dataclass
@@ -115,130 +118,191 @@ class _BallPicker:
         return chosen
 
 
+class Perception:
+    """Frame-by-frame perception.
+
+    `step` takes one frame and records what was seen. `snapshot` turns everything recorded so
+    far (or just the last N seconds) into a pitch-metre game state, deciding roles and teams
+    from all the evidence up to now. That makes the same code serve a finished clip (one
+    snapshot at the end) and a live stream (a snapshot every half second).
+    """
+
+    def __init__(self, detector: Optional[YoloDetector], calibrator: Optional[PitchCalibrator],
+                 fps: float, source_fps: Optional[float] = None, probe_every: int = 1):
+        self.detector, self.calibrator = detector, calibrator
+        self.fps = fps
+        self.source_fps = source_fps or fps
+        self.probe_every = probe_every
+        self.records: List[FrameRecord] = []
+        self.teams = TeamClassifier()
+        self.class_votes: Dict[int, Counter] = defaultdict(Counter)
+        self.keepers: set = set()
+        self.picker: Optional[_BallPicker] = None
+        self.frame_size = (0, 0)
+        self.timing: Counter = Counter()
+        self._team_colours: Dict[int, np.ndarray] = {}
+
+    def step(self, frame: np.ndarray, index: int, t: float) -> FrameRecord:
+        k = len(self.records)
+        self.frame_size = (frame.shape[1], frame.shape[0])
+        if self.picker is None:
+            self.picker = _BallPicker(frame.shape[1], self.fps)
+
+        t0 = time.time()
+        dets = self.detector.detect(frame)
+        self.timing["detect"] += time.time() - t0
+        t0 = time.time()
+        hom = self.calibrator.calibrate(frame)
+        self.timing["calibrate"] += time.time() - t0
+
+        people = [d for d in dets if d.cls in (PLAYER, GOALKEEPER, REFEREE)
+                  and d.track_id is not None]
+        colours: Dict[int, np.ndarray] = {}
+        for d in people:
+            if d.cls != REFEREE:
+                colour = shirt_colour(frame, d.box)
+                if colour is not None:
+                    colours[d.track_id] = colour
+
+        balls = [d for d in dets if d.cls == BALL]
+        if self.probe_every and k % self.probe_every == 0 and hom is not None \
+                and not any(b.conf >= 0.3 for b in balls):
+            t0 = time.time()
+            found = self.detector.probe_ball(frame, hom.to_image(SET_PIECE_SPOTS))
+            self.timing["probe"] += time.time() - t0
+            balls += found
+            dets = dets + found
+        ball = self.picker.pick(k, balls)
+
+        record = FrameRecord(index, t, dets, hom, ball, colours=colours)
+        if hom is not None:
+            if people:
+                for d, (x, y) in zip(people, hom.to_pitch([d.foot_px for d in people])):
+                    # People far outside the lines are coaches, substitutes or the crowd.
+                    if np.isfinite(x) and np.isfinite(y) and inside(float(x), float(y), 6.0):
+                        record.positions[d.track_id] = (float(x), float(y))
+            if ball is not None:
+                x1, _, x2, y2 = ball.box
+                bx, by = hom.to_pitch([((x1 + x2) / 2.0, y2)])[0]
+                if np.isfinite(bx) and np.isfinite(by) and abs(bx) < 500 and abs(by) < 500:
+                    record.ball_xy = (float(bx), float(by))
+        self.ingest(record)
+        return record
+
+    def ingest(self, record: FrameRecord) -> None:
+        """Take in one frame's observations. `step` calls this; so does a replay of a saved
+        analysis, which lets the live pipeline be exercised without re-running the models."""
+        for d in record.detections:
+            if d.track_id is not None and d.cls in (PLAYER, GOALKEEPER, REFEREE):
+                self.class_votes[d.track_id][d.cls] += 1
+        for tid, colour in record.colours.items():
+            self.teams.add(tid, colour)
+        self.records.append(record)
+
+    def snapshot(self, last_seconds: Optional[float] = None) -> Analysis:
+        records = self.records
+        if last_seconds is not None and records:
+            start = records[-1].t - last_seconds
+            records = [r for r in records if r.t >= start]
+
+        roles: Dict[int, str] = {}
+        for tid, votes in self.class_votes.items():
+            cls = votes.most_common(1)[0][0]
+            roles[tid] = REFEREE if cls == REFEREE else GOALKEEPER if cls == GOALKEEPER \
+                else PLAYER
+
+        split = self.teams.finalize([t for t, r in roles.items() if r != REFEREE])
+        team_of, colours = self._stable_labels(split)
+        positions = _smooth_positions(records, roles)
+        # Once a track has been recognised as a goalkeeper it stays one.
+        self.keepers.update(_find_keepers(positions, roles, split))
+        for tid in self.keepers:
+            if tid in roles:
+                roles[tid] = GOALKEEPER
+        _assign_keeper_teams(positions, roles, team_of)
+
+        states: List[FrameState] = []
+        for k, rec in enumerate(records):
+            if rec.homography is None:
+                states.append(FrameState(k, rec.t, None, [], calibrated=False))
+                continue
+            players = [PlayerState(tid, roles[tid], team_of.get(tid), xy)
+                       for tid, xy in positions[k].items()
+                       if roles.get(tid) in (PLAYER, GOALKEEPER)]
+            holder = None
+            if rec.ball is not None:
+                holders = [d.track_id for d in rec.detections
+                           if d.track_id is not None
+                           and roles.get(d.track_id) in (PLAYER, GOALKEEPER)
+                           and holds_ball(d.box, rec.ball.centre_px)]
+                holder = holders[0] if len(holders) == 1 else None
+            states.append(FrameState(k, rec.t, rec.ball_xy, players, calibrated=True,
+                                     ball_holder=holder))
+
+        n = max(1, len(records))
+        total = max(1, len(self.records))
+        stats = {
+            "analysed_frames": len(records),
+            "calibrated_fraction": sum(r.homography is not None for r in records) / n,
+            "ball_seen_fraction": sum(r.ball is not None for r in records) / n,
+            "seconds_per_frame": sum(self.timing.values()) / total,
+            "keeper_tracks": sum(r == GOALKEEPER for r in roles.values()),
+            **{f"seconds_{name}": value for name, value in self.timing.items()},
+        }
+        names = {k: colour_name(c) for k, c in colours.items()}
+        if len(set(names.values())) < len(names):  # both teams got the same colour word
+            names = {k: f"{v} ({'AB'[k]})" for k, v in names.items()}
+        return Analysis(states, self.fps, self.source_fps, self.frame_size, records, team_of,
+                        roles, colours, names, stats)
+
+    def _stable_labels(self, split) -> Tuple[Dict[int, int], Dict[int, np.ndarray]]:
+        """Keep "team 0" meaning the same team from one snapshot to the next. Clustering can
+        hand the two labels out in either order; match them to the colours seen last time."""
+        team_of, colours = dict(split.team_of), dict(split.colours)
+        if len(colours) == 2 and len(self._team_colours) == 2:
+            keep = sum(float(np.linalg.norm(colours[k] - self._team_colours[k])) for k in (0, 1))
+            swap = sum(float(np.linalg.norm(colours[k] - self._team_colours[1 - k]))
+                       for k in (0, 1))
+            if swap < keep:
+                team_of = {t: 1 - v for t, v in team_of.items()}
+                colours = {0: colours[1], 1: colours[0]}
+        if len(colours) == 2:
+            self._team_colours = colours
+        return team_of, colours
+
+
 def analyze(source: Path, detector: YoloDetector, calibrator: PitchCalibrator,
             analysis_fps: float = 12.5, default_fps: float = 25.0,
             max_seconds: Optional[float] = None, probe_every: int = 1,
             progress: Optional[Callable[[int, int], None]] = None) -> Analysis:
+    """Analyse a whole clip: every sampled frame through `Perception`, then one snapshot."""
     src_fps, count, frames = open_source(source, default_fps)
     step = max(1, int(round(src_fps / analysis_fps)))
-    fps = src_fps / step
-
-    records: List[FrameRecord] = []
-    teams = TeamClassifier()
-    class_votes: Dict[int, Counter] = defaultdict(Counter)
-    picker: Optional[_BallPicker] = None
-    frame_size = (0, 0)
-    timing = Counter()
-
+    perception = Perception(detector, calibrator, src_fps / step, src_fps, probe_every)
     for index, frame in enumerate(frames):
         if max_seconds is not None and index / src_fps > max_seconds:
             break
         if index % step:
             continue
-        k = len(records)
-        frame_size = (frame.shape[1], frame.shape[0])
-        if picker is None:
-            picker = _BallPicker(frame.shape[1], fps)
-
-        t0 = time.time()
-        dets = detector.detect(frame)
-        timing["detect"] += time.time() - t0
-        t0 = time.time()
-        hom = calibrator.calibrate(frame)
-        timing["calibrate"] += time.time() - t0
-
-        people = [d for d in dets if d.cls in (PLAYER, GOALKEEPER, REFEREE)
-                  and d.track_id is not None]
-        for d in people:
-            class_votes[d.track_id][d.cls] += 1
-            if d.cls != REFEREE:
-                teams.observe(frame, d.track_id, d.box)
-
-        balls = [d for d in dets if d.cls == BALL]
-        if probe_every and k % probe_every == 0 and hom is not None \
-                and not any(b.conf >= 0.3 for b in balls):
-            t0 = time.time()
-            found = detector.probe_ball(frame, hom.to_image(SET_PIECE_SPOTS))
-            timing["probe"] += time.time() - t0
-            balls += found
-            dets = dets + found
-        ball = picker.pick(k, balls)
-        records.append(FrameRecord(index, index / src_fps, dets, hom, ball))
+        perception.step(frame, index, index / src_fps)
         if progress:
             progress(index, count)
-
-    roles: Dict[int, str] = {}
-    for tid, votes in class_votes.items():
-        cls = votes.most_common(1)[0][0]
-        roles[tid] = REFEREE if cls == REFEREE else GOALKEEPER if cls == GOALKEEPER else PLAYER
-
-    split = teams.finalize([t for t, r in roles.items() if r != REFEREE])
-    team_of, colours = dict(split.team_of), split.colours
-    positions = _project(records, roles)
-    for tid in _find_keepers(positions, roles, split):
-        roles[tid] = GOALKEEPER
-    _assign_keeper_teams(positions, roles, team_of)
-
-    states: List[FrameState] = []
-    for k, rec in enumerate(records):
-        if rec.homography is None:
-            states.append(FrameState(k, rec.t, None, [], calibrated=False))
-            continue
-        players = [PlayerState(tid, roles[tid], team_of.get(tid), xy)
-                   for tid, xy in positions[k].items() if roles.get(tid) in (PLAYER, GOALKEEPER)]
-        ball_xy = None
-        if rec.ball is not None:
-            x1, _, x2, y2 = rec.ball.box
-            bx, by = rec.homography.to_pitch([((x1 + x2) / 2.0, y2)])[0]
-            if np.isfinite(bx) and np.isfinite(by) and abs(bx) < 500 and abs(by) < 500:
-                ball_xy = (float(bx), float(by))
-        holder = None
-        if rec.ball is not None:
-            holders = [d.track_id for d in rec.detections
-                       if d.track_id is not None and roles.get(d.track_id) in (PLAYER, GOALKEEPER)
-                       and holds_ball(d.box, rec.ball.centre_px)]
-            holder = holders[0] if len(holders) == 1 else None
-        states.append(FrameState(k, rec.t, ball_xy, players, calibrated=True,
-                                 ball_holder=holder))
-
-    n = max(1, len(records))
-    stats = {
-        "analysed_frames": len(records),
-        "calibrated_fraction": sum(r.homography is not None for r in records) / n,
-        "ball_seen_fraction": sum(r.ball is not None for r in records) / n,
-        "seconds_per_frame": sum(timing.values()) / n,
-        "keeper_tracks": sum(r == GOALKEEPER for r in roles.values()),
-        **{f"seconds_{name}": value for name, value in timing.items()},
-    }
-    names = {k: colour_name(c) for k, c in colours.items()}
-    if len(set(names.values())) < len(names):  # both teams got the same colour word
-        names = {k: f"{v} ({'AB'[k]})" for k, v in names.items()}
-    return Analysis(states, fps, src_fps, frame_size, records, team_of, roles, colours,
-                    names, stats)
+    return perception.snapshot()
 
 
-def _project(records: List[FrameRecord], roles: Dict[int, str],
-             smooth: int = 5) -> List[Dict[int, Tuple[float, float]]]:
-    """Project people onto the pitch, then median-smooth each track to damp calibration jitter."""
-    raw: List[Dict[int, Tuple[float, float]]] = []
-    for rec in records:
-        here: Dict[int, Tuple[float, float]] = {}
-        people = [d for d in rec.detections if d.track_id is not None and d.track_id in roles]
-        if rec.homography is not None and people:
-            pts = rec.homography.to_pitch([d.foot_px for d in people])
-            for d, (x, y) in zip(people, pts):
-                # People far outside the lines are coaches, substitutes or the crowd.
-                if np.isfinite(x) and np.isfinite(y) and inside(float(x), float(y), 6.0):
-                    here[d.track_id] = (float(x), float(y))
-        raw.append(here)
-
+def _smooth_positions(records: List[FrameRecord], roles: Dict[int, str],
+                      smooth: int = 5) -> List[Dict[int, Tuple[float, float]]]:
+    """Median-smooth each track's pitch position to damp calibration jitter."""
     half = smooth // 2
     out: List[Dict[int, Tuple[float, float]]] = []
-    for k, here in enumerate(raw):
+    for k, rec in enumerate(records):
         smoothed = {}
-        for tid in here:
-            window = [raw[j][tid] for j in range(max(0, k - half), min(len(raw), k + half + 1))
-                      if tid in raw[j]]
+        for tid in rec.positions:
+            if tid not in roles:
+                continue
+            window = [records[j].positions[tid]
+                      for j in range(max(0, k - half), min(len(records), k + half + 1))
+                      if tid in records[j].positions]
             arr = np.asarray(window)
             smoothed[tid] = (float(np.median(arr[:, 0])), float(np.median(arr[:, 1])))
         out.append(smoothed)
